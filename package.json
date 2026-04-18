@@ -12,7 +12,8 @@
     "build": "npm run build:electron && npm run build:renderer",
     "build:electron": "tsc -p tsconfig.electron.json",
     "build:renderer": "vite build",
-    "typecheck": "tsc --noEmit -p tsconfig.electron.json && tsc --noEmit -p tsconfig.json"
+    "typecheck": "tsc --noEmit -p tsconfig.electron.json && tsc --noEmit -p tsconfig.json",
+    "validate:workflow": "npm run build:electron && node scripts/validate-workflow.mjs"
   },
   "devDependencies": {
     "@types/node": "^24.8.1",

@@ -34,6 +34,7 @@ type Elements = {
   jsonOutput: HTMLPreElement;
   markdownOutput: HTMLPreElement;
   uriOutput: HTMLPreElement;
+  uriHint: HTMLParagraphElement;
   copyMarkdownButton: HTMLButtonElement;
   generateUriButton: HTMLButtonElement;
   persistHint: HTMLParagraphElement;
@@ -51,7 +52,7 @@ const buttonTimers = new WeakMap<HTMLButtonElement, number>();
 const desktopBridge = window.desktopBridge;
 const appInfo = desktopBridge?.appInfo ?? {
   name: "AI Flashcard",
-  phase: "V1 Step 6",
+  phase: "V1 Step 7",
   targetPlatforms: ["macOS", "Windows"],
   stack: ["Electron", "TypeScript", "Vite"],
 };
@@ -87,25 +88,25 @@ function renderAppShell() {
 
     <main class="app-shell">
       <section class="hero">
-        <p class="eyebrow">${appInfo.phase} · URI Fallback</p>
+        <p class="eyebrow">${appInfo.phase} · Workflow Validation</p>
         <h1>${appInfo.name}</h1>
         <p class="hero-copy">
-          第 6 步开始把 Obsidian URI 做成真正的保底交付链路：优先直写 vault，
-          遇到目录缺失、权限受阻或写入失败时，可以直接唤起 Obsidian 完成交接。
+          第 7 步开始进入主工作流联调：继续保留 Vault 直写与 URI 保底双通道，
+          并围绕真实示例验证从输入、生成到落库的关键链路。
         </p>
 
         <div class="hero-badges">
           ${appInfo.targetPlatforms.map((item) => `<span>${item}</span>`).join("")}
           ${appInfo.stack.map((item) => `<span>${item}</span>`).join("")}
-          <span>URI Fallback</span>
+          <span>Workflow Validation</span>
         </div>
       </section>
 
       <section class="warning-card">
         <strong>当前阶段</strong>
         <p>
-          当前重点已经进入“桌面端落库 + 回退交付”。AI 结构化结果与 Markdown 生成器会优先驱动 vault 写入，
-          一旦受阻，就切换到 Obsidian URI 唤起方案。
+          当前重点已经进入“主工作流联调与首轮验证”。AI 结构化结果、Markdown 生成、
+          Vault 直写与 URI 回退都需要被真实样例串联验证。
         </p>
       </section>
 
@@ -254,6 +255,9 @@ function renderAppShell() {
           <p>这里现在已经是正式保底链路，可在写入失败时自动回退，也可手动一键唤起。</p>
         </div>
         <pre id="uriOutput" class="code-block small"></pre>
+        <p id="uriHint" class="persist-hint">
+          当前还没有生成 URI。
+        </p>
         <div class="action-row">
           <button id="openUriButton" class="secondary">使用 Obsidian URI 打开</button>
         </div>
@@ -286,6 +290,7 @@ function collectElements(): Elements {
     jsonOutput: byId<HTMLPreElement>("jsonOutput"),
     markdownOutput: byId<HTMLPreElement>("markdownOutput"),
     uriOutput: byId<HTMLPreElement>("uriOutput"),
+    uriHint: byId<HTMLParagraphElement>("uriHint"),
     copyMarkdownButton: byId<HTMLButtonElement>("copyMarkdownButton"),
     generateUriButton: byId<HTMLButtonElement>("generateUriButton"),
     persistHint: byId<HTMLParagraphElement>("persistHint"),
@@ -627,6 +632,7 @@ function renderOutputs(
     : "等待生成结构化结果…";
   elements.markdownOutput.textContent = markdown || "等待生成 Markdown…";
   elements.uriOutput.textContent = uri || "等待生成 Obsidian URI…";
+  elements.uriHint.textContent = describeUriState(uri);
 }
 
 function ensureContentReady(elements: Elements) {
@@ -664,6 +670,18 @@ async function triggerUriFallback(elements: Elements, reason: string, originalEr
 
   elements.vaultHint.textContent = `${reason} 已生成 URI 预览，可手动继续。${details}`;
   setButtonLabel(elements.writeVaultButton, "写入失败");
+}
+
+function describeUriState(uri: string) {
+  if (!uri) {
+    return "当前还没有生成 URI。";
+  }
+
+  if (uri.length > 1800) {
+    return `当前 URI 长度约 ${uri.length} 个字符，在部分系统环境中可能偏长，建议优先使用 Vault 直写。`;
+  }
+
+  return `当前 URI 长度约 ${uri.length} 个字符，可作为写入失败时的保底方案。`;
 }
 
 function setButtonLabel(button: HTMLButtonElement, label: string) {

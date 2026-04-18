@@ -62,6 +62,23 @@
 - Obsidian URI 生成
 - 无 API 时的本地降级生成
 
+## 工作流验证
+
+桌面端第 7 步联调目前提供了一个可重复执行的验证脚本，用于检查：
+
+- 单词、词组、句子三类示例输入
+- Markdown 卡片生成
+- Vault 文件写入
+- Obsidian URI 生成
+
+可直接运行：
+
+```bash
+npm run validate:workflow
+```
+
+当前验证会在本机临时目录中创建模拟 vault，验证完成后自动清理。
+
 ## 参考资料
 
 - [Obsidian URI 官方文档](https://help.obsidian.md/uri)
