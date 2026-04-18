@@ -30,6 +30,7 @@ type Elements = {
   resetPromptButton: HTMLButtonElement;
   chooseVaultButton: HTMLButtonElement;
   writeVaultButton: HTMLButtonElement;
+  openUriButton: HTMLButtonElement;
   jsonOutput: HTMLPreElement;
   markdownOutput: HTMLPreElement;
   uriOutput: HTMLPreElement;
@@ -50,7 +51,7 @@ const buttonTimers = new WeakMap<HTMLButtonElement, number>();
 const desktopBridge = window.desktopBridge;
 const appInfo = desktopBridge?.appInfo ?? {
   name: "AI Flashcard",
-  phase: "V1 Step 5",
+  phase: "V1 Step 6",
   targetPlatforms: ["macOS", "Windows"],
   stack: ["Electron", "TypeScript", "Vite"],
 };
@@ -58,6 +59,7 @@ const appInfo = desktopBridge?.appInfo ?? {
 let currentStructuredData: StructuredData | null = null;
 let currentMarkdown = "";
 let currentVaultPath = "";
+let currentUri = "";
 
 bootstrap();
 
@@ -85,25 +87,25 @@ function renderAppShell() {
 
     <main class="app-shell">
       <section class="hero">
-        <p class="eyebrow">${appInfo.phase} · Vault Adapter</p>
+        <p class="eyebrow">${appInfo.phase} · URI Fallback</p>
         <h1>${appInfo.name}</h1>
         <p class="hero-copy">
-          第 5 步已经接入桌面端 VaultAdapter：现在可以选择 Obsidian vault 目录、保存路径，
-          并将当前生成的 Markdown 直接写入 vault。写入失败时仍保留 URI 保底链路。
+          第 6 步开始把 Obsidian URI 做成真正的保底交付链路：优先直写 vault，
+          遇到目录缺失、权限受阻或写入失败时，可以直接唤起 Obsidian 完成交接。
         </p>
 
         <div class="hero-badges">
           ${appInfo.targetPlatforms.map((item) => `<span>${item}</span>`).join("")}
           ${appInfo.stack.map((item) => `<span>${item}</span>`).join("")}
-          <span>Vault Adapter</span>
+          <span>URI Fallback</span>
         </div>
       </section>
 
       <section class="warning-card">
         <strong>当前阶段</strong>
         <p>
-          当前重点已经进入“桌面端落库”。AI 结构化结果与 Markdown 生成器会直接驱动 vault 写入，
-          未来只需要继续完善路径策略和联调体验。
+          当前重点已经进入“桌面端落库 + 回退交付”。AI 结构化结果与 Markdown 生成器会优先驱动 vault 写入，
+          一旦受阻，就切换到 Obsidian URI 唤起方案。
         </p>
       </section>
 
@@ -249,9 +251,12 @@ function renderAppShell() {
       <section class="panel final-panel">
         <div class="panel-head">
           <h2>Obsidian URI</h2>
-          <p>在支持的平台上，这里就是后续“同步到 Obsidian”按钮的保底链路。</p>
+          <p>这里现在已经是正式保底链路，可在写入失败时自动回退，也可手动一键唤起。</p>
         </div>
         <pre id="uriOutput" class="code-block small"></pre>
+        <div class="action-row">
+          <button id="openUriButton" class="secondary">使用 Obsidian URI 打开</button>
+        </div>
       </section>
     </main>
   `;
@@ -277,6 +282,7 @@ function collectElements(): Elements {
     resetPromptButton: byId<HTMLButtonElement>("resetPromptButton"),
     chooseVaultButton: byId<HTMLButtonElement>("chooseVaultButton"),
     writeVaultButton: byId<HTMLButtonElement>("writeVaultButton"),
+    openUriButton: byId<HTMLButtonElement>("openUriButton"),
     jsonOutput: byId<HTMLPreElement>("jsonOutput"),
     markdownOutput: byId<HTMLPreElement>("markdownOutput"),
     uriOutput: byId<HTMLPreElement>("uriOutput"),
@@ -323,6 +329,9 @@ function bindEvents(elements: Elements) {
   });
   elements.writeVaultButton.addEventListener("click", () => {
     void handleWriteVault(elements);
+  });
+  elements.openUriButton.addEventListener("click", () => {
+    void handleOpenUri(elements);
   });
   elements.sourceType.addEventListener("change", () => syncSuggestedFolder(elements));
 }
@@ -476,37 +485,34 @@ async function handleCopyMarkdown(elements: Elements) {
 }
 
 function handleGenerateUri(elements: Elements) {
-  if (!currentStructuredData) {
+  if (!ensureContentReady(elements)) {
     return;
   }
 
-  const uri = buildObsidianUri(elements.vaultName.value, currentStructuredData.notePath, currentMarkdown);
-  elements.uriOutput.textContent = uri;
+  currentUri = buildCurrentUri(elements);
+  renderOutputs(elements, currentStructuredData, currentMarkdown, currentUri);
   setButtonLabel(elements.generateUriButton, "已生成 URI");
 }
 
 async function handleWriteVault(elements: Elements) {
+  if (!ensureContentReady(elements)) {
+    elements.vaultHint.textContent = "当前没有可写入的 Markdown 内容。";
+    return;
+  }
+
   if (!desktopBridge?.vault) {
-    elements.vaultHint.textContent = "当前环境不支持桌面端 Vault 写入。";
+    await triggerUriFallback(elements, "当前环境不支持桌面端 Vault 写入。");
     return;
   }
 
   if (!currentVaultPath) {
-    elements.vaultHint.textContent = "请先选择 Vault 目录。";
+    await triggerUriFallback(elements, "尚未选择 Vault 目录。");
     return;
   }
 
-  if (!currentStructuredData) {
-    const form = collectForm(elements);
-    if (!form.rawInput) {
-      renderValidationError(elements, "请先输入知识内容。");
-      return;
-    }
-
-    updateWithStructuredData(elements, buildFallbackStructuredData(form));
-  }
-
-  if (!currentStructuredData || !currentMarkdown) {
+  const structuredData = currentStructuredData;
+  const markdown = currentMarkdown;
+  if (!structuredData || !markdown) {
     elements.vaultHint.textContent = "当前没有可写入的 Markdown 内容。";
     return;
   }
@@ -516,18 +522,47 @@ async function handleWriteVault(elements: Elements) {
   try {
     const result = await desktopBridge.vault.writeMarkdown({
       vaultPath: currentVaultPath,
-      notePath: currentStructuredData.notePath,
-      content: currentMarkdown,
+      notePath: structuredData.notePath,
+      content: markdown,
       strategy: "overwrite",
     });
 
     elements.vaultHint.textContent = `${result.message} ${result.filePath}`;
     setButtonLabel(elements.writeVaultButton, result.written ? "已写入" : "已跳过");
   } catch (error) {
+    await triggerUriFallback(
+      elements,
+      "写入 Vault 失败，已尝试自动切换到 Obsidian URI。",
+      String(error instanceof Error ? error.message : error),
+    );
+  }
+}
+
+async function handleOpenUri(elements: Elements) {
+  if (!ensureContentReady(elements)) {
+    return false;
+  }
+
+  currentUri = buildCurrentUri(elements);
+  renderOutputs(elements, currentStructuredData, currentMarkdown, currentUri);
+
+  if (!desktopBridge?.obsidian) {
+    elements.vaultHint.textContent = "当前环境不支持桌面端 URI 唤起，请手动复制下方 URI。";
+    setButtonLabel(elements.openUriButton, "仅生成 URI");
+    return false;
+  }
+
+  try {
+    const result = await desktopBridge.obsidian.openUri(currentUri);
+    elements.vaultHint.textContent = result.message;
+    setButtonLabel(elements.openUriButton, "已唤起");
+    return true;
+  } catch (error) {
     elements.vaultHint.textContent =
-      "写入 Vault 失败，请改用 URI 保底或检查目录权限。错误：" +
+      "Obsidian URI 唤起失败，请手动复制下方 URI。错误：" +
       String(error instanceof Error ? error.message : error);
-    setButtonLabel(elements.writeVaultButton, "写入失败");
+    setButtonLabel(elements.openUriButton, "唤起失败");
+    return false;
   }
 }
 
@@ -548,6 +583,9 @@ function collectForm(elements: Elements): FormState {
 }
 
 function renderValidationError(elements: Elements, message: string) {
+  currentStructuredData = null;
+  currentMarkdown = "";
+  currentUri = "";
   renderOutputs(
     elements,
     {
@@ -574,8 +612,8 @@ function updateWithStructuredData(elements: Elements, structuredData: Structured
     notePath: document.notePath,
     keywords: document.keywords,
   };
-  const uri = buildObsidianUri(elements.vaultName.value, document.notePath, document.content);
-  renderOutputs(elements, currentStructuredData, currentMarkdown, uri);
+  currentUri = buildObsidianUri(elements.vaultName.value, document.notePath, document.content);
+  renderOutputs(elements, currentStructuredData, currentMarkdown, currentUri);
 }
 
 function renderOutputs(
@@ -589,6 +627,43 @@ function renderOutputs(
     : "等待生成结构化结果…";
   elements.markdownOutput.textContent = markdown || "等待生成 Markdown…";
   elements.uriOutput.textContent = uri || "等待生成 Obsidian URI…";
+}
+
+function ensureContentReady(elements: Elements) {
+  if (currentStructuredData && currentMarkdown) {
+    return true;
+  }
+
+  const form = collectForm(elements);
+  if (!form.rawInput) {
+    renderValidationError(elements, "请先输入知识内容。");
+    return false;
+  }
+
+  updateWithStructuredData(elements, buildFallbackStructuredData(form));
+  return Boolean(currentStructuredData && currentMarkdown);
+}
+
+function buildCurrentUri(elements: Elements) {
+  if (!currentStructuredData || !currentMarkdown) {
+    throw new Error("当前缺少可用的 URI 内容。");
+  }
+
+  return buildObsidianUri(elements.vaultName.value, currentStructuredData.notePath, currentMarkdown);
+}
+
+async function triggerUriFallback(elements: Elements, reason: string, originalError?: string) {
+  const opened = await handleOpenUri(elements);
+  const details = originalError ? ` 原始错误：${originalError}` : "";
+
+  if (opened) {
+    elements.vaultHint.textContent = `${reason} 已成功唤起 Obsidian URI 回退。${details}`;
+    setButtonLabel(elements.writeVaultButton, "已回退");
+    return;
+  }
+
+  elements.vaultHint.textContent = `${reason} 已生成 URI 预览，可手动继续。${details}`;
+  setButtonLabel(elements.writeVaultButton, "写入失败");
 }
 
 function setButtonLabel(button: HTMLButtonElement, label: string) {

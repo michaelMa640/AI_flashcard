@@ -66,6 +66,31 @@ function registerIpcHandlers() {
   ipcMain.handle("vault:write-markdown", async (_event, payload) => {
     return writeMarkdownToVault(payload);
   });
+
+  ipcMain.handle("obsidian:open-uri", async (_event, rawUri: string) => {
+    const uri = assertObsidianUri(rawUri);
+    await shell.openExternal(uri);
+    return {
+      ok: true,
+      uri,
+      message: "已唤起 Obsidian URI 回退链路。",
+    };
+  });
+}
+
+function assertObsidianUri(rawUri: string) {
+  const uri = rawUri.trim();
+
+  if (!uri) {
+    throw new Error("Obsidian URI 不能为空。");
+  }
+
+  const parsed = new URL(uri);
+  if (parsed.protocol !== "obsidian:") {
+    throw new Error("当前只允许唤起 obsidian:// URI。");
+  }
+
+  return uri;
 }
 
 app.whenReady().then(() => {

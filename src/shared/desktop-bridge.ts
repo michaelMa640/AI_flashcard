@@ -8,4 +8,11 @@ export type DesktopBridgeApi = {
     chooseDirectory(): Promise<VaultConfig>;
     writeMarkdown(payload: WriteMarkdownRequest): Promise<WriteMarkdownResult>;
   };
+  obsidian: {
+    openUri(uri: string): Promise<{
+      ok: boolean;
+      uri: string;
+      message: string;
+    }>;
+  };
 };

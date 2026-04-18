@@ -9,6 +9,9 @@ const desktopBridge: DesktopBridgeApi = {
     chooseDirectory: () => ipcRenderer.invoke("vault:choose-directory"),
     writeMarkdown: (payload) => ipcRenderer.invoke("vault:write-markdown", payload),
   },
+  obsidian: {
+    openUri: (uri) => ipcRenderer.invoke("obsidian:open-uri", uri),
+  },
 };
 
 contextBridge.exposeInMainWorld("desktopBridge", desktopBridge);
