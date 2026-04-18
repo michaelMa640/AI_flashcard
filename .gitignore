@@ -1,0 +1,48 @@
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Dependencies / build output
+node_modules/
+dist/
+dist-electron/
+build/
+out/
+coverage/
+.cache/
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.mobileprovision
+
+# Local app data / private config
+data/
+storage/
+tmp/
+temp/
+*.sqlite
+*.db
+*.db-shm
+*.db-wal
+*.local.json
+*.private.json
+vault-path.txt
+vault-path.json
+
+# Private project docs
+docs/
+obsidian_docs_staging/
