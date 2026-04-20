@@ -11,7 +11,24 @@ import type { FormState, PersistedSettings, RunMode, SourceType, StructuredData 
 import type { VaultConfig } from "../shared/vault-types.js";
 import { requestStructuredData } from "./services/ai-client.js";
 
+type DemoPreset = {
+  id: string;
+  label: string;
+  tone: string;
+  rawInput: string;
+  sourceType: SourceType;
+  mode: RunMode;
+  deckTag: string;
+  folder: string;
+  context: string;
+};
+
 type Elements = {
+  presetButtons: HTMLButtonElement[];
+  readinessSummary: HTMLParagraphElement;
+  vaultStatus: HTMLElement;
+  contentStatus: HTMLElement;
+  aiStatus: HTMLElement;
   rawInput: HTMLTextAreaElement;
   sourceType: HTMLSelectElement;
   mode: HTMLSelectElement;
@@ -36,6 +53,7 @@ type Elements = {
   uriOutput: HTMLPreElement;
   uriHint: HTMLParagraphElement;
   copyMarkdownButton: HTMLButtonElement;
+  copyUriButton: HTMLButtonElement;
   generateUriButton: HTMLButtonElement;
   persistHint: HTMLParagraphElement;
   vaultHint: HTMLParagraphElement;
@@ -52,10 +70,45 @@ const buttonTimers = new WeakMap<HTMLButtonElement, number>();
 const desktopBridge = window.desktopBridge;
 const appInfo = desktopBridge?.appInfo ?? {
   name: "AI Flashcard",
-  phase: "V1 Step 7",
+  phase: "V1 Step 8",
   targetPlatforms: ["macOS", "Windows"],
   stack: ["Electron", "TypeScript", "Vite"],
 };
+const DEMO_PRESETS: DemoPreset[] = [
+  {
+    id: "phrase-ai",
+    label: "词组演示",
+    tone: "AI 解释",
+    rawInput: "a blessing in disguise",
+    sourceType: "phrase",
+    mode: "ai",
+    deckTag: "english/phrases",
+    folder: "English Cards/Phrases",
+    context: "我想知道这个短语的中文含义、语气和适合复习的记忆点。",
+  },
+  {
+    id: "word-direct",
+    label: "单词直入",
+    tone: "直接入库",
+    rawInput: "serendipity",
+    sourceType: "word",
+    mode: "direct",
+    deckTag: "english/words",
+    folder: "English Cards/Words",
+    context: "这是读小说时遇到的单词，希望快速落库形成复习卡片。",
+  },
+  {
+    id: "sentence-ai",
+    label: "句子拆解",
+    tone: "AI 解释",
+    rawInput: "What feels like the end is often the beginning in disguise.",
+    sourceType: "sentence",
+    mode: "ai",
+    deckTag: "english/sentences",
+    folder: "English Cards/Sentences",
+    context: "我想知道这句话的核心含义、适合复习的表达亮点和使用语境。",
+  },
+];
 
 let currentStructuredData: StructuredData | null = null;
 let currentMarkdown = "";
@@ -78,6 +131,7 @@ function bootstrap() {
   hydrateDefaults(elements, saved);
   renderOutputs(elements, null, "", "");
   bindEvents(elements);
+  updateDemoStatus(elements);
   void hydrateVaultState(elements);
 }
 
@@ -88,26 +142,87 @@ function renderAppShell() {
 
     <main class="app-shell">
       <section class="hero">
-        <p class="eyebrow">${appInfo.phase} · Workflow Validation</p>
+        <p class="eyebrow">${appInfo.phase} · Demo Release</p>
         <h1>${appInfo.name}</h1>
         <p class="hero-copy">
-          第 7 步开始进入主工作流联调：继续保留 Vault 直写与 URI 保底双通道，
-          并围绕真实示例验证从输入、生成到落库的关键链路。
+          第 8 步开始整理 V1 可演示版本：保留 Vault 直写与 URI 保底双通道，
+          同时补齐演示样例、状态提示、说明文案与已知边界，让主流程更适合直接展示。
         </p>
 
         <div class="hero-badges">
           ${appInfo.targetPlatforms.map((item) => `<span>${item}</span>`).join("")}
           ${appInfo.stack.map((item) => `<span>${item}</span>`).join("")}
-          <span>Workflow Validation</span>
+          <span>Demo Release</span>
         </div>
       </section>
 
       <section class="warning-card">
         <strong>当前阶段</strong>
         <p>
-          当前重点已经进入“主工作流联调与首轮验证”。AI 结构化结果、Markdown 生成、
-          Vault 直写与 URI 回退都需要被真实样例串联验证。
+          当前重点已经进入“V1 演示收尾”。除了保证主流程可用，还要让别人第一次看到界面时，
+          能快速理解怎么演示、怎么入库、哪里是当前边界。
         </p>
+      </section>
+
+      <section class="grid overview-grid">
+        <section class="panel">
+          <div class="panel-head">
+            <h2>演示样例</h2>
+            <p>点击任意样例即可快速填充内容，适合现场演示主链路。</p>
+          </div>
+
+          <div class="preset-cloud">
+            ${DEMO_PRESETS.map(
+              (preset) => `
+                <button
+                  type="button"
+                  class="preset-chip"
+                  data-demo-preset="${preset.id}"
+                >
+                  <span>${preset.label}</span>
+                  <small>${preset.tone}</small>
+                </button>
+              `,
+            ).join("")}
+          </div>
+
+          <p id="readinessSummary" class="readiness-summary">
+            先选择一个演示样例或输入你自己的内容，就可以开始演示。
+          </p>
+        </section>
+
+        <section class="panel">
+          <div class="panel-head">
+            <h2>V1 演示清单</h2>
+            <p>当前版本建议按下面顺序展示，能更自然地体现产品价值。</p>
+          </div>
+
+          <ul class="checklist">
+            <li>1. 选择演示样例或输入一条真实知识内容。</li>
+            <li>2. 点击“AI 解释并结构化”或“直接生成最小卡片”。</li>
+            <li>3. 展示结构化结果、Markdown 预览与 Obsidian URI。</li>
+            <li>4. 选择 Vault 后演示一键写入；写入受阻时展示 URI 回退。</li>
+          </ul>
+
+          <div class="readiness-grid">
+            <article class="mini-status">
+              <span>Vault 状态</span>
+              <strong id="vaultStatus">待选择</strong>
+            </article>
+            <article class="mini-status">
+              <span>内容状态</span>
+              <strong id="contentStatus">待输入</strong>
+            </article>
+            <article class="mini-status">
+              <span>AI 状态</span>
+              <strong id="aiStatus">待确认</strong>
+            </article>
+          </div>
+
+          <p class="persist-hint">
+            当前已知边界：Windows 实机联调仍待补齐；长内容场景下 URI 可能偏长，建议优先使用 Vault 直写。
+          </p>
+        </section>
       </section>
 
       <section class="grid">
@@ -259,6 +374,7 @@ function renderAppShell() {
           当前还没有生成 URI。
         </p>
         <div class="action-row">
+          <button id="copyUriButton" class="ghost">复制 URI</button>
           <button id="openUriButton" class="secondary">使用 Obsidian URI 打开</button>
         </div>
       </section>
@@ -268,6 +384,11 @@ function renderAppShell() {
 
 function collectElements(): Elements {
   return {
+    presetButtons: Array.from(document.querySelectorAll<HTMLButtonElement>("[data-demo-preset]")),
+    readinessSummary: byId<HTMLParagraphElement>("readinessSummary"),
+    vaultStatus: byId<HTMLElement>("vaultStatus"),
+    contentStatus: byId<HTMLElement>("contentStatus"),
+    aiStatus: byId<HTMLElement>("aiStatus"),
     rawInput: byId<HTMLTextAreaElement>("rawInput"),
     sourceType: byId<HTMLSelectElement>("sourceType"),
     mode: byId<HTMLSelectElement>("mode"),
@@ -292,6 +413,7 @@ function collectElements(): Elements {
     uriOutput: byId<HTMLPreElement>("uriOutput"),
     uriHint: byId<HTMLParagraphElement>("uriHint"),
     copyMarkdownButton: byId<HTMLButtonElement>("copyMarkdownButton"),
+    copyUriButton: byId<HTMLButtonElement>("copyUriButton"),
     generateUriButton: byId<HTMLButtonElement>("generateUriButton"),
     persistHint: byId<HTMLParagraphElement>("persistHint"),
     vaultHint: byId<HTMLParagraphElement>("vaultHint"),
@@ -319,6 +441,9 @@ function hydrateDefaults(elements: Elements, saved: PersistedSettings) {
 }
 
 function bindEvents(elements: Elements) {
+  elements.presetButtons.forEach((button) => {
+    button.addEventListener("click", () => handleApplyPreset(elements, button.dataset.demoPreset || ""));
+  });
   elements.saveSettingsButton.addEventListener("click", () => handleSaveSettings(elements));
   elements.resetPromptButton.addEventListener("click", () => handleResetPrompt(elements));
   elements.runButton.addEventListener("click", () => {
@@ -327,6 +452,9 @@ function bindEvents(elements: Elements) {
   elements.fallbackButton.addEventListener("click", () => handleFallbackGenerate(elements));
   elements.copyMarkdownButton.addEventListener("click", () => {
     void handleCopyMarkdown(elements);
+  });
+  elements.copyUriButton.addEventListener("click", () => {
+    void handleCopyUri(elements);
   });
   elements.generateUriButton.addEventListener("click", () => handleGenerateUri(elements));
   elements.chooseVaultButton.addEventListener("click", () => {
@@ -338,7 +466,27 @@ function bindEvents(elements: Elements) {
   elements.openUriButton.addEventListener("click", () => {
     void handleOpenUri(elements);
   });
-  elements.sourceType.addEventListener("change", () => syncSuggestedFolder(elements));
+  elements.sourceType.addEventListener("change", () => {
+    syncSuggestedFolder(elements);
+    updateDemoStatus(elements);
+  });
+
+  const liveElements = [
+    elements.rawInput,
+    elements.mode,
+    elements.vaultName,
+    elements.deckTag,
+    elements.folder,
+    elements.context,
+    elements.baseUrl,
+    elements.model,
+    elements.apiKey,
+  ];
+
+  liveElements.forEach((element) => {
+    element.addEventListener("input", () => updateDemoStatus(elements));
+    element.addEventListener("change", () => updateDemoStatus(elements));
+  });
 }
 
 async function hydrateVaultState(elements: Elements) {
@@ -364,6 +512,7 @@ function applyVaultConfig(elements: Elements, config: VaultConfig) {
   }
 
   elements.vaultHint.textContent = "当前尚未选择 Vault 目录。";
+  updateDemoStatus(elements);
 }
 
 function loadSettings(): PersistedSettings {
@@ -393,12 +542,35 @@ function handleSaveSettings(elements: Elements) {
   saveSettings(elements);
   elements.persistHint.textContent = "设置已保存到当前桌面应用本地存储。";
   setButtonLabel(elements.saveSettingsButton, "已保存");
+  updateDemoStatus(elements);
 }
 
 function handleResetPrompt(elements: Elements) {
   elements.systemPrompt.value = DEFAULT_SYSTEM_PROMPT;
   saveSettings(elements);
   elements.persistHint.textContent = "系统 Prompt 已恢复默认并同步保存。";
+  updateDemoStatus(elements);
+}
+
+function handleApplyPreset(elements: Elements, presetId: string) {
+  const preset = DEMO_PRESETS.find((item) => item.id === presetId);
+
+  if (!preset) {
+    return;
+  }
+
+  elements.rawInput.value = preset.rawInput;
+  elements.sourceType.value = preset.sourceType;
+  elements.mode.value = preset.mode;
+  elements.deckTag.value = preset.deckTag;
+  elements.folder.value = preset.folder;
+  elements.context.value = preset.context;
+  if (!elements.vaultName.value.trim()) {
+    elements.vaultName.value = currentVaultPath ? extractVaultName(currentVaultPath) : "My English Vault";
+  }
+
+  elements.persistHint.textContent = `已载入“${preset.label}”演示样例，可以直接开始演示。`;
+  updateDemoStatus(elements);
 }
 
 async function handleChooseVault(elements: Elements) {
@@ -486,6 +658,22 @@ async function handleCopyMarkdown(elements: Elements) {
     setButtonLabel(elements.copyMarkdownButton, "已复制");
   } catch {
     setButtonLabel(elements.copyMarkdownButton, "复制失败");
+  }
+}
+
+async function handleCopyUri(elements: Elements) {
+  if (!ensureContentReady(elements)) {
+    return;
+  }
+
+  currentUri = buildCurrentUri(elements);
+  renderOutputs(elements, currentStructuredData, currentMarkdown, currentUri);
+
+  try {
+    await navigator.clipboard.writeText(currentUri);
+    setButtonLabel(elements.copyUriButton, "已复制 URI");
+  } catch {
+    setButtonLabel(elements.copyUriButton, "复制失败");
   }
 }
 
@@ -633,6 +821,7 @@ function renderOutputs(
   elements.markdownOutput.textContent = markdown || "等待生成 Markdown…";
   elements.uriOutput.textContent = uri || "等待生成 Obsidian URI…";
   elements.uriHint.textContent = describeUriState(uri);
+  updateDemoStatus(elements);
 }
 
 function ensureContentReady(elements: Elements) {
@@ -682,6 +871,61 @@ function describeUriState(uri: string) {
   }
 
   return `当前 URI 长度约 ${uri.length} 个字符，可作为写入失败时的保底方案。`;
+}
+
+function updateDemoStatus(elements: Elements) {
+  const form = collectForm(elements);
+  const hasContent = Boolean(form.rawInput);
+  const hasVault = Boolean(currentVaultPath);
+  const aiConfigured = Boolean(form.baseUrl && form.model && form.apiKey);
+
+  if (hasVault) {
+    setMiniStatus(elements.vaultStatus, "已就绪", "ready");
+  } else {
+    setMiniStatus(elements.vaultStatus, "待选择", "waiting");
+  }
+
+  if (hasContent) {
+    setMiniStatus(elements.contentStatus, "可生成", "ready");
+  } else {
+    setMiniStatus(elements.contentStatus, "待输入", "waiting");
+  }
+
+  if (form.mode === "direct") {
+    setMiniStatus(elements.aiStatus, "直接入库", "neutral");
+  } else if (aiConfigured) {
+    setMiniStatus(elements.aiStatus, "AI 就绪", "ready");
+  } else {
+    setMiniStatus(elements.aiStatus, "将降级生成", "warning");
+  }
+
+  elements.readinessSummary.textContent = buildReadinessSummary(hasContent, hasVault, form.mode, aiConfigured);
+}
+
+function buildReadinessSummary(
+  hasContent: boolean,
+  hasVault: boolean,
+  mode: RunMode,
+  aiConfigured: boolean,
+) {
+  if (!hasContent) {
+    return "先选择一个演示样例或输入你自己的内容，就可以开始演示。";
+  }
+
+  if (mode === "ai" && !aiConfigured) {
+    return "当前 AI 配置还不完整，点击生成时会自动降级为本地最小卡片，适合演示无 Key 的兜底流程。";
+  }
+
+  if (!hasVault) {
+    return "当前已经可以演示 AI 解释、结构化结果和 Markdown 预览；如果要演示一键入库，请先选择 Vault。";
+  }
+
+  return "当前已经具备完整的 V1 演示条件，可以从输入一路展示到 Vault 写入或 URI 回退。";
+}
+
+function setMiniStatus(element: HTMLElement, text: string, state: "ready" | "waiting" | "warning" | "neutral") {
+  element.textContent = text;
+  element.dataset.state = state;
 }
 
 function setButtonLabel(button: HTMLButtonElement, label: string) {
