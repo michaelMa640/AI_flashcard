@@ -1,62 +1,83 @@
 import "./style.css";
 import { DEFAULT_SYSTEM_PROMPT } from "../shared/ai-prompt.js";
 import type { DesktopBridgeApi } from "../shared/desktop-bridge.js";
-import {
-  buildFallbackStructuredData,
-  buildObsidianUri,
-  folderFromType,
-} from "../shared/flashcard-utils.js";
+import { buildFallbackStructuredData, buildObsidianUri, folderFromType } from "../shared/flashcard-utils.js";
 import { buildMarkdownDocument } from "../shared/markdown-generator.js";
 import type { FormState, PersistedSettings, RunMode, SourceType, StructuredData } from "../shared/flashcard-types.js";
 import type { VaultConfig } from "../shared/vault-types.js";
 import { requestStructuredData } from "./services/ai-client.js";
 
+type AppPage = "capture" | "settings";
+
 type DemoPreset = {
   id: string;
   label: string;
-  tone: string;
   rawInput: string;
   sourceType: SourceType;
   mode: RunMode;
-  deckTag: string;
   folder: string;
+  deckTag: string;
   context: string;
 };
 
+type HistoryEntry = {
+  id: string;
+  createdAt: string;
+  title: string;
+  sourceType: SourceType;
+  mode: RunMode;
+  rawInput: string;
+  context: string;
+  folder: string;
+  deckTag: string;
+  vaultName: string;
+  structuredData: StructuredData;
+  markdown: string;
+  uri: string;
+};
+
 type Elements = {
+  navCaptureButton: HTMLButtonElement;
+  navSettingsButton: HTMLButtonElement;
+  capturePage: HTMLElement;
+  settingsPage: HTMLElement;
+  debugSection: HTMLElement | null;
   presetButtons: HTMLButtonElement[];
-  readinessSummary: HTMLParagraphElement;
-  vaultStatus: HTMLElement;
-  contentStatus: HTMLElement;
-  aiStatus: HTMLElement;
   rawInput: HTMLTextAreaElement;
   sourceType: HTMLSelectElement;
   mode: HTMLSelectElement;
-  vaultName: HTMLInputElement;
-  deckTag: HTMLInputElement;
   folder: HTMLInputElement;
+  deckTag: HTMLInputElement;
   context: HTMLTextAreaElement;
+  runButton: HTMLButtonElement;
+  fallbackButton: HTMLButtonElement;
+  generationHint: HTMLParagraphElement;
+  previewTitle: HTMLHeadingElement;
+  previewMeta: HTMLParagraphElement;
+  markdownOutput: HTMLPreElement;
+  copyMarkdownButton: HTMLButtonElement;
+  historyList: HTMLDivElement;
+  historyEmpty: HTMLParagraphElement;
   baseUrl: HTMLInputElement;
   model: HTMLInputElement;
   apiKey: HTMLInputElement;
   systemPrompt: HTMLTextAreaElement;
+  vaultName: HTMLInputElement;
   vaultPath: HTMLInputElement;
-  runButton: HTMLButtonElement;
-  fallbackButton: HTMLButtonElement;
   saveSettingsButton: HTMLButtonElement;
   resetPromptButton: HTMLButtonElement;
   chooseVaultButton: HTMLButtonElement;
   writeVaultButton: HTMLButtonElement;
-  openUriButton: HTMLButtonElement;
-  jsonOutput: HTMLPreElement;
-  markdownOutput: HTMLPreElement;
+  dataStrategyHint: HTMLParagraphElement;
+  vaultHint: HTMLParagraphElement;
   uriOutput: HTMLPreElement;
   uriHint: HTMLParagraphElement;
-  copyMarkdownButton: HTMLButtonElement;
   copyUriButton: HTMLButtonElement;
+  openUriButton: HTMLButtonElement;
   generateUriButton: HTMLButtonElement;
   persistHint: HTMLParagraphElement;
-  vaultHint: HTMLParagraphElement;
+  jsonPanel: HTMLElement | null;
+  jsonOutput: HTMLPreElement | null;
 };
 
 declare global {
@@ -65,55 +86,58 @@ declare global {
   }
 }
 
-const STORAGE_KEY = "flashcard-obsidian-desktop-settings";
+const SETTINGS_STORAGE_KEY = "flashcard-obsidian-desktop-settings";
+const HISTORY_STORAGE_KEY = "flashcard-local-history";
+const HISTORY_LIMIT = 24;
+const DEBUG_MODE = new URLSearchParams(window.location.search).get("debug") === "1";
 const buttonTimers = new WeakMap<HTMLButtonElement, number>();
 const desktopBridge = window.desktopBridge;
 const appInfo = desktopBridge?.appInfo ?? {
   name: "AI Flashcard",
-  phase: "V1 Step 8",
+  phase: "V2 Step 1",
   targetPlatforms: ["macOS", "Windows"],
   stack: ["Electron", "TypeScript", "Vite"],
 };
 const DEMO_PRESETS: DemoPreset[] = [
   {
-    id: "phrase-ai",
-    label: "词组演示",
-    tone: "AI 解释",
+    id: "english-phrase",
+    label: "英语词组",
     rawInput: "a blessing in disguise",
     sourceType: "phrase",
     mode: "ai",
+    folder: "英语",
     deckTag: "english/phrases",
-    folder: "English Cards/Phrases",
-    context: "我想知道这个短语的中文含义、语气和适合复习的记忆点。",
+    context: "我想要这个短语的中文含义、语气和适合记忆的提示。",
   },
   {
-    id: "word-direct",
-    label: "单词直入",
-    tone: "直接入库",
+    id: "english-word",
+    label: "英语单词",
     rawInput: "serendipity",
     sourceType: "word",
     mode: "direct",
+    folder: "英语",
     deckTag: "english/words",
-    folder: "English Cards/Words",
-    context: "这是读小说时遇到的单词，希望快速落库形成复习卡片。",
+    context: "这是我读文章时遇到的单词，希望快速生成复习卡片。",
   },
   {
-    id: "sentence-ai",
-    label: "句子拆解",
-    tone: "AI 解释",
-    rawInput: "What feels like the end is often the beginning in disguise.",
-    sourceType: "sentence",
+    id: "job-custom",
+    label: "求职知识点",
+    rawInput: "STAR 法则在面试回答中的核心作用是什么？",
+    sourceType: "custom",
     mode: "ai",
-    deckTag: "english/sentences",
-    folder: "English Cards/Sentences",
-    context: "我想知道这句话的核心含义、适合复习的表达亮点和使用语境。",
+    folder: "求职",
+    deckTag: "career/interview",
+    context: "我想用这条内容生成面试复习卡片，重点是核心定义、提示和常见追问。",
   },
 ];
 
 let currentStructuredData: StructuredData | null = null;
 let currentMarkdown = "";
-let currentVaultPath = "";
 let currentUri = "";
+let currentVaultPath = "";
+let currentPage: AppPage = "capture";
+let historyEntries: HistoryEntry[] = [];
+let isGenerating = false;
 
 bootstrap();
 
@@ -128,10 +152,12 @@ function bootstrap() {
   const elements = collectElements();
   const saved = loadSettings();
 
+  historyEntries = loadHistory();
   hydrateDefaults(elements, saved);
   renderOutputs(elements, null, "", "");
+  renderHistory(elements);
   bindEvents(elements);
-  updateDemoStatus(elements);
+  switchPage(elements, "capture");
   void hydrateVaultState(elements);
 }
 
@@ -142,241 +168,242 @@ function renderAppShell() {
 
     <main class="app-shell">
       <section class="hero">
-        <p class="eyebrow">${appInfo.phase} · Demo Release</p>
+        <p class="eyebrow">${appInfo.phase} · Local First</p>
         <h1>${appInfo.name}</h1>
         <p class="hero-copy">
-          第 8 步开始整理 V1 可演示版本：保留 Vault 直写与 URI 保底双通道，
-          同时补齐演示样例、状态提示、说明文案与已知边界，让主流程更适合直接展示。
-        </p>
-
-        <div class="hero-badges">
-          ${appInfo.targetPlatforms.map((item) => `<span>${item}</span>`).join("")}
-          ${appInfo.stack.map((item) => `<span>${item}</span>`).join("")}
-          <span>Demo Release</span>
-        </div>
-      </section>
-
-      <section class="warning-card">
-        <strong>当前阶段</strong>
-        <p>
-          当前重点已经进入“V1 演示收尾”。除了保证主流程可用，还要让别人第一次看到界面时，
-          能快速理解怎么演示、怎么入库、哪里是当前边界。
+          这是一个本地优先的知识卡片工具。你可以在这里录入内容、生成卡片、查看历史，
+          再按需把数据同步到可选的外部渠道。
         </p>
       </section>
 
-      <section class="grid overview-grid">
-        <section class="panel">
-          <div class="panel-head">
-            <h2>演示样例</h2>
-            <p>点击任意样例即可快速填充内容，适合现场演示主链路。</p>
-          </div>
+      <section class="nav-shell">
+        <button id="navCaptureButton" class="nav-chip nav-chip-active" type="button">录入与预览</button>
+        <button id="navSettingsButton" class="nav-chip" type="button">设置</button>
+      </section>
 
-          <div class="preset-cloud">
-            ${DEMO_PRESETS.map(
-              (preset) => `
-                <button
-                  type="button"
-                  class="preset-chip"
-                  data-demo-preset="${preset.id}"
-                >
-                  <span>${preset.label}</span>
-                  <small>${preset.tone}</small>
-                </button>
-              `,
-            ).join("")}
-          </div>
+      <section id="capturePage" class="page-shell">
+        <section class="page-grid">
+          <section class="panel">
+            <div class="panel-head">
+              <h2>录入内容</h2>
+              <p>先确定内容、分类文件夹和生成方式，再继续预览与保存。</p>
+            </div>
 
-          <p id="readinessSummary" class="readiness-summary">
-            先选择一个演示样例或输入你自己的内容，就可以开始演示。
-          </p>
+            ${
+              DEBUG_MODE
+                ? `
+                  <section id="debugSection" class="debug-card">
+                    <div class="panel-head compact">
+                      <h3>开发辅助</h3>
+                      <p>仅用于开发阶段快速填充样例，正式界面不展示。</p>
+                    </div>
+                    <div class="preset-cloud">
+                      ${DEMO_PRESETS.map(
+                        (preset) => `
+                          <button type="button" class="preset-chip" data-demo-preset="${preset.id}">
+                            <span>${preset.label}</span>
+                            <small>${preset.folder}</small>
+                          </button>
+                        `,
+                      ).join("")}
+                    </div>
+                  </section>
+                `
+                : ""
+            }
+
+            <label class="field">
+              <span>原始内容</span>
+              <textarea
+                id="rawInput"
+                rows="8"
+                placeholder="例如：A blessing in disguise"
+              ></textarea>
+            </label>
+
+            <div class="field-row">
+              <label class="field">
+                <span>内容类型</span>
+                <select id="sourceType">
+                  <option value="word">单词</option>
+                  <option value="phrase" selected>词组 / 短语</option>
+                  <option value="sentence">句子</option>
+                  <option value="custom">自定义知识</option>
+                </select>
+              </label>
+
+              <label class="field">
+                <span>生成方式</span>
+                <select id="mode">
+                  <option value="ai" selected>AI 解释</option>
+                  <option value="direct">直接生成</option>
+                </select>
+              </label>
+            </div>
+
+            <div class="field-row">
+              <label class="field">
+                <span>分类文件夹</span>
+                <input id="folder" type="text" placeholder="例如：英语" />
+              </label>
+
+              <label class="field">
+                <span>复习标签</span>
+                <input id="deckTag" type="text" placeholder="例如：english/phrases" />
+              </label>
+            </div>
+
+            <label class="field">
+              <span>补充上下文</span>
+              <textarea
+                id="context"
+                rows="4"
+                placeholder="例如：这是我读文章时看到的表达，我想知道它的含义、提示和使用场景。"
+              ></textarea>
+            </label>
+
+            <div class="action-row">
+              <button id="runButton" class="primary" type="button">AI 解释并结构化</button>
+              <button id="fallbackButton" class="ghost" type="button">直接生成最小卡片</button>
+            </div>
+
+            <p id="generationHint" class="status-hint">
+              当前还没有开始生成，你可以先输入内容或选择调试样例。
+            </p>
+          </section>
+
+          <section class="panel">
+            <div class="panel-head">
+              <h2 id="previewTitle">卡片预览</h2>
+              <p id="previewMeta">生成后这里会展示当前卡片内容。</p>
+            </div>
+
+            <pre id="markdownOutput" class="code-block preview-block">等待生成卡片内容…</pre>
+
+            <div class="action-row">
+              <button id="copyMarkdownButton" class="secondary" type="button">复制卡片内容</button>
+            </div>
+
+            ${
+              DEBUG_MODE
+                ? `
+                  <section id="jsonPanel" class="debug-card subtle">
+                    <div class="panel-head compact">
+                      <h3>结构化结果（调试）</h3>
+                      <p>正式页面不直接展示，仅用于当前开发阶段确认结构化输出。</p>
+                    </div>
+                    <pre id="jsonOutput" class="code-block small">等待生成结构化结果…</pre>
+                  </section>
+                `
+                : ""
+            }
+          </section>
         </section>
 
-        <section class="panel">
+        <section class="panel history-panel">
           <div class="panel-head">
-            <h2>V1 演示清单</h2>
-            <p>当前版本建议按下面顺序展示，能更自然地体现产品价值。</p>
+            <h2>录入历史</h2>
+            <p>这里会保留最近生成过的卡片草稿，方便你回看和继续处理。</p>
           </div>
 
-          <ul class="checklist">
-            <li>1. 选择演示样例或输入一条真实知识内容。</li>
-            <li>2. 点击“AI 解释并结构化”或“直接生成最小卡片”。</li>
-            <li>3. 展示结构化结果、Markdown 预览与 Obsidian URI。</li>
-            <li>4. 选择 Vault 后演示一键写入；写入受阻时展示 URI 回退。</li>
-          </ul>
-
-          <div class="readiness-grid">
-            <article class="mini-status">
-              <span>Vault 状态</span>
-              <strong id="vaultStatus">待选择</strong>
-            </article>
-            <article class="mini-status">
-              <span>内容状态</span>
-              <strong id="contentStatus">待输入</strong>
-            </article>
-            <article class="mini-status">
-              <span>AI 状态</span>
-              <strong id="aiStatus">待确认</strong>
-            </article>
-          </div>
-
-          <p class="persist-hint">
-            当前已知边界：Windows 实机联调仍待补齐；长内容场景下 URI 可能偏长，建议优先使用 Vault 直写。
-          </p>
+          <p id="historyEmpty" class="empty-state">当前还没有录入历史。</p>
+          <div id="historyList" class="history-list"></div>
         </section>
       </section>
 
-      <section class="grid">
-        <section class="panel input-panel">
-          <div class="panel-head">
-            <h2>录入</h2>
-            <p>决定这条内容是直接入库，还是先让 AI 结构化解释。</p>
-          </div>
+      <section id="settingsPage" class="page-shell page-hidden">
+        <section class="page-grid">
+          <section class="panel">
+            <div class="panel-head">
+              <h2>AI 设置</h2>
+              <p>这里管理模型接口、Prompt 模板和生成时依赖的配置。</p>
+            </div>
 
-          <label class="field">
-            <span>原始内容</span>
-            <textarea
-              id="rawInput"
-              rows="7"
-              placeholder="例如：A blessing in disguise"
-            ></textarea>
-          </label>
+            <div class="field-row">
+              <label class="field">
+                <span>Base URL</span>
+                <input id="baseUrl" type="text" placeholder="https://api.openai.com/v1" />
+              </label>
 
-          <div class="field-row">
+              <label class="field">
+                <span>Model</span>
+                <input id="model" type="text" placeholder="gpt-4.1-mini" />
+              </label>
+            </div>
+
             <label class="field">
-              <span>内容类型</span>
-              <select id="sourceType">
-                <option value="word">单词</option>
-                <option value="phrase" selected>词组 / 短语</option>
-                <option value="sentence">句子</option>
-                <option value="custom">自定义知识</option>
-              </select>
+              <span>API Key</span>
+              <input id="apiKey" type="password" placeholder="sk-..." />
             </label>
 
             <label class="field">
-              <span>处理方式</span>
-              <select id="mode">
-                <option value="ai" selected>先 AI 解释</option>
-                <option value="direct">直接加入知识库</option>
-              </select>
-            </label>
-          </div>
-
-          <div class="field-row">
-            <label class="field">
-              <span>Vault 名称</span>
-              <input id="vaultName" type="text" placeholder="My English Vault" />
+              <span>System Prompt</span>
+              <textarea id="systemPrompt" rows="12"></textarea>
             </label>
 
-            <label class="field">
-              <span>Deck 标签</span>
-              <input id="deckTag" type="text" placeholder="english/phrases" />
-            </label>
-          </div>
+            <div class="action-row">
+              <button id="saveSettingsButton" class="secondary" type="button">保存设置</button>
+              <button id="resetPromptButton" class="ghost" type="button">恢复默认 Prompt</button>
+            </div>
+          </section>
 
-          <label class="field">
-            <span>默认目录</span>
-            <input id="folder" type="text" placeholder="English Cards/Phrases" />
-          </label>
+          <section class="panel">
+            <div class="panel-head">
+              <h2>数据渠道</h2>
+              <p>当前阶段默认使用本地应用数据；iCloud 和 Obsidian 作为可选外部渠道。</p>
+            </div>
 
-          <label class="field">
-            <span>补充上下文</span>
-            <textarea
-              id="context"
-              rows="4"
-              placeholder="例如：这是我读文章时看到的表达，我想知道语气、含义和使用场景。"
-            ></textarea>
-          </label>
+            <article class="channel-card">
+              <strong>本地数据</strong>
+              <p id="dataStrategyHint">当前默认策略：本地优先。当前录入历史保存在应用本地存储中。</p>
+            </article>
 
-          <div class="action-row">
-            <button id="runButton" class="primary">AI 解释并结构化</button>
-            <button id="fallbackButton" class="ghost">直接生成最小卡片</button>
-          </div>
-        </section>
+            <article class="channel-card">
+              <strong>iCloud 备份</strong>
+              <p>V2 后续会把它作为可选备份渠道接入，这一步先保留产品位置和说明。</p>
+            </article>
 
-        <section class="panel settings-panel">
-          <div class="panel-head">
-            <h2>设置</h2>
-            <p>支持 OpenAI 兼容接口，也支持手动调整 Prompt 模板与桌面端 vault 目录。</p>
-          </div>
+            <article class="channel-card">
+              <strong>Obsidian 外部存储</strong>
+              <p>如果你希望把卡片额外写入 Obsidian，可以在这里配置目录并执行同步。</p>
 
-          <div class="field-row">
-            <label class="field">
-              <span>Base URL</span>
-              <input id="baseUrl" type="text" placeholder="https://api.openai.com/v1" />
-            </label>
+              <label class="field">
+                <span>Obsidian 存储目录</span>
+                <input id="vaultPath" type="text" placeholder="尚未选择目录" readonly />
+              </label>
 
-            <label class="field">
-              <span>Model</span>
-              <input id="model" type="text" placeholder="gpt-4.1-mini" />
-            </label>
-          </div>
+              <label class="field">
+                <span>Obsidian 存储名称</span>
+                <input id="vaultName" type="text" placeholder="My Knowledge Vault" />
+              </label>
 
-          <label class="field">
-            <span>API Key</span>
-            <input id="apiKey" type="password" placeholder="sk-..." />
-          </label>
+              <p id="vaultHint" class="persist-hint">当前尚未选择目录。</p>
 
-          <label class="field">
-            <span>System Prompt</span>
-            <textarea id="systemPrompt" rows="12"></textarea>
-          </label>
-
-          <label class="field">
-            <span>Vault 目录</span>
-            <input id="vaultPath" type="text" placeholder="尚未选择 Vault 目录" readonly />
-          </label>
-
-          <p id="persistHint" class="persist-hint">
-            普通设置当前仍保存在桌面应用本地存储中。
-          </p>
-          <p id="vaultHint" class="persist-hint">
-            当前尚未选择 Vault 目录。
-          </p>
-
-          <div class="action-row">
-            <button id="saveSettingsButton" class="secondary">保存设置</button>
-            <button id="resetPromptButton" class="ghost">恢复默认 Prompt</button>
-            <button id="chooseVaultButton" class="secondary">选择 Vault 目录</button>
-            <button id="writeVaultButton" class="primary">写入到 Vault</button>
-          </div>
-        </section>
-      </section>
-
-      <section class="grid output-grid">
-        <section class="panel">
-          <div class="panel-head">
-            <h2>结构化结果</h2>
-            <p>AI 返回后先落到统一数据结构，再转 Markdown。</p>
-          </div>
-          <pre id="jsonOutput" class="code-block"></pre>
+              <div class="action-row">
+                <button id="chooseVaultButton" class="secondary" type="button">选择目录</button>
+                <button id="writeVaultButton" class="primary" type="button">同步到 Obsidian</button>
+              </div>
+            </article>
+          </section>
         </section>
 
         <section class="panel">
           <div class="panel-head">
-            <h2>Markdown 预览</h2>
-            <p>这部分就是将来写入 Obsidian 的笔记内容。</p>
+            <h2>外部回退链接</h2>
+            <p>当前链接仅在需要把卡片交给 Obsidian 创建时才会使用，平时不必关心。</p>
           </div>
-          <pre id="markdownOutput" class="code-block"></pre>
-          <div class="action-row">
-            <button id="copyMarkdownButton" class="secondary">复制 Markdown</button>
-            <button id="generateUriButton" class="ghost">生成 Obsidian URI</button>
-          </div>
-        </section>
-      </section>
 
-      <section class="panel final-panel">
-        <div class="panel-head">
-          <h2>Obsidian URI</h2>
-          <p>这里现在已经是正式保底链路，可在写入失败时自动回退，也可手动一键唤起。</p>
-        </div>
-        <pre id="uriOutput" class="code-block small"></pre>
-        <p id="uriHint" class="persist-hint">
-          当前还没有生成 URI。
-        </p>
-        <div class="action-row">
-          <button id="copyUriButton" class="ghost">复制 URI</button>
-          <button id="openUriButton" class="secondary">使用 Obsidian URI 打开</button>
-        </div>
+          <pre id="uriOutput" class="code-block small">等待生成外部回退链接…</pre>
+          <p id="uriHint" class="persist-hint">当前还没有生成外部回退链接。</p>
+
+          <div class="action-row">
+            <button id="generateUriButton" class="ghost" type="button">生成链接</button>
+            <button id="copyUriButton" class="ghost" type="button">复制链接</button>
+            <button id="openUriButton" class="secondary" type="button">打开 Obsidian</button>
+          </div>
+
+          <p id="persistHint" class="persist-hint">普通设置会保存在当前桌面应用的本地存储中。</p>
+        </section>
       </section>
     </main>
   `;
@@ -384,39 +411,47 @@ function renderAppShell() {
 
 function collectElements(): Elements {
   return {
+    navCaptureButton: byId<HTMLButtonElement>("navCaptureButton"),
+    navSettingsButton: byId<HTMLButtonElement>("navSettingsButton"),
+    capturePage: byId<HTMLElement>("capturePage"),
+    settingsPage: byId<HTMLElement>("settingsPage"),
+    debugSection: document.getElementById("debugSection"),
     presetButtons: Array.from(document.querySelectorAll<HTMLButtonElement>("[data-demo-preset]")),
-    readinessSummary: byId<HTMLParagraphElement>("readinessSummary"),
-    vaultStatus: byId<HTMLElement>("vaultStatus"),
-    contentStatus: byId<HTMLElement>("contentStatus"),
-    aiStatus: byId<HTMLElement>("aiStatus"),
     rawInput: byId<HTMLTextAreaElement>("rawInput"),
     sourceType: byId<HTMLSelectElement>("sourceType"),
     mode: byId<HTMLSelectElement>("mode"),
-    vaultName: byId<HTMLInputElement>("vaultName"),
-    deckTag: byId<HTMLInputElement>("deckTag"),
     folder: byId<HTMLInputElement>("folder"),
+    deckTag: byId<HTMLInputElement>("deckTag"),
     context: byId<HTMLTextAreaElement>("context"),
+    runButton: byId<HTMLButtonElement>("runButton"),
+    fallbackButton: byId<HTMLButtonElement>("fallbackButton"),
+    generationHint: byId<HTMLParagraphElement>("generationHint"),
+    previewTitle: byId<HTMLHeadingElement>("previewTitle"),
+    previewMeta: byId<HTMLParagraphElement>("previewMeta"),
+    markdownOutput: byId<HTMLPreElement>("markdownOutput"),
+    copyMarkdownButton: byId<HTMLButtonElement>("copyMarkdownButton"),
+    historyList: byId<HTMLDivElement>("historyList"),
+    historyEmpty: byId<HTMLParagraphElement>("historyEmpty"),
     baseUrl: byId<HTMLInputElement>("baseUrl"),
     model: byId<HTMLInputElement>("model"),
     apiKey: byId<HTMLInputElement>("apiKey"),
     systemPrompt: byId<HTMLTextAreaElement>("systemPrompt"),
+    vaultName: byId<HTMLInputElement>("vaultName"),
     vaultPath: byId<HTMLInputElement>("vaultPath"),
-    runButton: byId<HTMLButtonElement>("runButton"),
-    fallbackButton: byId<HTMLButtonElement>("fallbackButton"),
     saveSettingsButton: byId<HTMLButtonElement>("saveSettingsButton"),
     resetPromptButton: byId<HTMLButtonElement>("resetPromptButton"),
     chooseVaultButton: byId<HTMLButtonElement>("chooseVaultButton"),
     writeVaultButton: byId<HTMLButtonElement>("writeVaultButton"),
-    openUriButton: byId<HTMLButtonElement>("openUriButton"),
-    jsonOutput: byId<HTMLPreElement>("jsonOutput"),
-    markdownOutput: byId<HTMLPreElement>("markdownOutput"),
+    dataStrategyHint: byId<HTMLParagraphElement>("dataStrategyHint"),
+    vaultHint: byId<HTMLParagraphElement>("vaultHint"),
     uriOutput: byId<HTMLPreElement>("uriOutput"),
     uriHint: byId<HTMLParagraphElement>("uriHint"),
-    copyMarkdownButton: byId<HTMLButtonElement>("copyMarkdownButton"),
     copyUriButton: byId<HTMLButtonElement>("copyUriButton"),
+    openUriButton: byId<HTMLButtonElement>("openUriButton"),
     generateUriButton: byId<HTMLButtonElement>("generateUriButton"),
     persistHint: byId<HTMLParagraphElement>("persistHint"),
-    vaultHint: byId<HTMLParagraphElement>("vaultHint"),
+    jsonPanel: document.getElementById("jsonPanel"),
+    jsonOutput: document.getElementById("jsonOutput") as HTMLPreElement | null,
   };
 }
 
@@ -435,12 +470,15 @@ function hydrateDefaults(elements: Elements, saved: PersistedSettings) {
   elements.model.value = saved.model || "gpt-4.1-mini";
   elements.apiKey.value = saved.apiKey || "";
   elements.systemPrompt.value = saved.systemPrompt || DEFAULT_SYSTEM_PROMPT;
-  elements.vaultName.value = saved.vaultName || "My English Vault";
+  elements.vaultName.value = saved.vaultName || "My Knowledge Vault";
   elements.deckTag.value = saved.deckTag || "english/phrases";
-  elements.folder.value = saved.folder || "English Cards/Phrases";
+  elements.folder.value = saved.folder || "英语";
+  elements.dataStrategyHint.textContent = "当前默认策略：本地优先。当前录入历史保存在应用本地存储中。";
 }
 
 function bindEvents(elements: Elements) {
+  elements.navCaptureButton.addEventListener("click", () => switchPage(elements, "capture"));
+  elements.navSettingsButton.addEventListener("click", () => switchPage(elements, "settings"));
   elements.presetButtons.forEach((button) => {
     button.addEventListener("click", () => handleApplyPreset(elements, button.dataset.demoPreset || ""));
   });
@@ -466,32 +504,21 @@ function bindEvents(elements: Elements) {
   elements.openUriButton.addEventListener("click", () => {
     void handleOpenUri(elements);
   });
-  elements.sourceType.addEventListener("change", () => {
-    syncSuggestedFolder(elements);
-    updateDemoStatus(elements);
-  });
+  elements.sourceType.addEventListener("change", () => syncSuggestedFolder(elements));
+}
 
-  const liveElements = [
-    elements.rawInput,
-    elements.mode,
-    elements.vaultName,
-    elements.deckTag,
-    elements.folder,
-    elements.context,
-    elements.baseUrl,
-    elements.model,
-    elements.apiKey,
-  ];
-
-  liveElements.forEach((element) => {
-    element.addEventListener("input", () => updateDemoStatus(elements));
-    element.addEventListener("change", () => updateDemoStatus(elements));
-  });
+function switchPage(elements: Elements, page: AppPage) {
+  currentPage = page;
+  const captureActive = page === "capture";
+  elements.capturePage.classList.toggle("page-hidden", !captureActive);
+  elements.settingsPage.classList.toggle("page-hidden", captureActive);
+  elements.navCaptureButton.classList.toggle("nav-chip-active", captureActive);
+  elements.navSettingsButton.classList.toggle("nav-chip-active", !captureActive);
 }
 
 async function hydrateVaultState(elements: Elements) {
   if (!desktopBridge?.vault) {
-    elements.vaultHint.textContent = "当前环境不支持桌面端 Vault 访问。";
+    elements.vaultHint.textContent = "当前环境不支持 Obsidian 外部存储目录选择。";
     return;
   }
 
@@ -504,20 +531,19 @@ function applyVaultConfig(elements: Elements, config: VaultConfig) {
   elements.vaultPath.value = currentVaultPath;
 
   if (currentVaultPath) {
-    elements.vaultHint.textContent = `已选择 Vault 目录：${currentVaultPath}`;
+    elements.vaultHint.textContent = `已选择目录：${currentVaultPath}`;
     if (!elements.vaultName.value.trim()) {
       elements.vaultName.value = extractVaultName(currentVaultPath);
     }
     return;
   }
 
-  elements.vaultHint.textContent = "当前尚未选择 Vault 目录。";
-  updateDemoStatus(elements);
+  elements.vaultHint.textContent = "当前尚未选择目录。";
 }
 
 function loadSettings(): PersistedSettings {
   try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
+    const raw = window.localStorage.getItem(SETTINGS_STORAGE_KEY);
     return raw ? (JSON.parse(raw) as PersistedSettings) : {};
   } catch {
     return {};
@@ -535,21 +561,91 @@ function saveSettings(elements: Elements) {
     folder: elements.folder.value.trim(),
   };
 
-  window.localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
+  window.localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(payload));
+}
+
+function loadHistory(): HistoryEntry[] {
+  try {
+    const raw = window.localStorage.getItem(HISTORY_STORAGE_KEY);
+    return raw ? (JSON.parse(raw) as HistoryEntry[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveHistory() {
+  window.localStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify(historyEntries));
+}
+
+function persistHistoryEntry(entry: HistoryEntry) {
+  historyEntries = [entry]
+    .concat(historyEntries.filter((item) => item.id !== entry.id))
+    .slice(0, HISTORY_LIMIT);
+  saveHistory();
+}
+
+function renderHistory(elements: Elements) {
+  if (historyEntries.length === 0) {
+    elements.historyEmpty.hidden = false;
+    elements.historyList.innerHTML = "";
+    return;
+  }
+
+  elements.historyEmpty.hidden = true;
+  elements.historyList.innerHTML = historyEntries
+    .map(
+      (entry) => `
+        <button class="history-item" type="button" data-history-id="${entry.id}">
+          <span class="history-item-title">${escapeHtml(entry.title)}</span>
+          <span class="history-item-meta">${renderHistoryMeta(entry)}</span>
+          <span class="history-item-snippet">${escapeHtml(entry.rawInput.slice(0, 120))}</span>
+        </button>
+      `,
+    )
+    .join("");
+
+  elements.historyList.querySelectorAll<HTMLButtonElement>("[data-history-id]").forEach((button) => {
+    button.addEventListener("click", () => handleHistorySelect(elements, button.dataset.historyId || ""));
+  });
+}
+
+function renderHistoryMeta(entry: HistoryEntry) {
+  return `${formatRelativeDate(entry.createdAt)} · ${sourceTypeLabel(entry.sourceType)} · ${entry.folder}`;
+}
+
+function handleHistorySelect(elements: Elements, entryId: string) {
+  const entry = historyEntries.find((item) => item.id === entryId);
+
+  if (!entry) {
+    return;
+  }
+
+  elements.rawInput.value = entry.rawInput;
+  elements.sourceType.value = entry.sourceType;
+  elements.mode.value = entry.mode;
+  elements.folder.value = entry.folder;
+  elements.deckTag.value = entry.deckTag;
+  elements.context.value = entry.context;
+  elements.vaultName.value = entry.vaultName;
+  currentStructuredData = entry.structuredData;
+  currentMarkdown = entry.markdown;
+  currentUri = entry.uri;
+  isGenerating = false;
+  renderOutputs(elements, currentStructuredData, currentMarkdown, currentUri);
+  elements.generationHint.textContent = "已加载一条历史记录，你可以继续编辑、预览或同步到外部存储。";
+  switchPage(elements, "capture");
 }
 
 function handleSaveSettings(elements: Elements) {
   saveSettings(elements);
-  elements.persistHint.textContent = "设置已保存到当前桌面应用本地存储。";
+  elements.persistHint.textContent = "设置已保存到当前桌面应用的本地存储。";
   setButtonLabel(elements.saveSettingsButton, "已保存");
-  updateDemoStatus(elements);
 }
 
 function handleResetPrompt(elements: Elements) {
   elements.systemPrompt.value = DEFAULT_SYSTEM_PROMPT;
   saveSettings(elements);
   elements.persistHint.textContent = "系统 Prompt 已恢复默认并同步保存。";
-  updateDemoStatus(elements);
 }
 
 function handleApplyPreset(elements: Elements, presetId: string) {
@@ -562,20 +658,15 @@ function handleApplyPreset(elements: Elements, presetId: string) {
   elements.rawInput.value = preset.rawInput;
   elements.sourceType.value = preset.sourceType;
   elements.mode.value = preset.mode;
-  elements.deckTag.value = preset.deckTag;
   elements.folder.value = preset.folder;
+  elements.deckTag.value = preset.deckTag;
   elements.context.value = preset.context;
-  if (!elements.vaultName.value.trim()) {
-    elements.vaultName.value = currentVaultPath ? extractVaultName(currentVaultPath) : "My English Vault";
-  }
-
-  elements.persistHint.textContent = `已载入“${preset.label}”演示样例，可以直接开始演示。`;
-  updateDemoStatus(elements);
+  elements.generationHint.textContent = `已载入“${preset.label}”调试样例，可继续生成预览。`;
 }
 
 async function handleChooseVault(elements: Elements) {
   if (!desktopBridge?.vault) {
-    elements.vaultHint.textContent = "当前环境不支持选择 Vault 目录。";
+    elements.vaultHint.textContent = "当前环境不支持选择 Obsidian 外部存储目录。";
     return;
   }
 
@@ -588,20 +679,13 @@ async function handleChooseVault(elements: Elements) {
 function syncSuggestedFolder(elements: Elements) {
   const type = elements.sourceType.value as SourceType;
   const suggestions: Record<SourceType, string> = {
-    word: "English Cards/Words",
-    phrase: "English Cards/Phrases",
-    sentence: "English Cards/Sentences",
-    custom: "Knowledge Cards",
+    word: "英语",
+    phrase: "英语",
+    sentence: "英语",
+    custom: "求职",
   };
 
   if (!elements.folder.value.trim()) {
-    elements.folder.value = suggestions[type];
-    return;
-  }
-
-  const current = elements.folder.value.trim();
-  const known = Object.values(suggestions);
-  if (known.includes(current)) {
     elements.folder.value = suggestions[type];
   }
 }
@@ -616,23 +700,25 @@ async function handleRunAI(elements: Elements) {
   }
 
   if (form.mode === "direct" || !form.apiKey || !form.baseUrl || !form.model) {
-    updateWithStructuredData(elements, buildFallbackStructuredData(form));
+    const fallback = buildFallbackStructuredData(form);
+    if (form.mode === "ai" && (!form.apiKey || !form.baseUrl || !form.model)) {
+      fallback.runtimeNotice = "AI 配置尚未完整，已自动降级为本地最小卡片生成。";
+    }
+    updateWithStructuredData(elements, fallback);
     return;
   }
 
-  setButtonLabel(elements.runButton, "请求中...");
+  beginGeneration(elements, "AI 正在解析内容并生成结构化卡片，请稍候…");
 
   try {
     const result = await requestStructuredData(form);
     updateWithStructuredData(elements, result);
-    setButtonLabel(elements.runButton, "AI 解释并结构化");
   } catch (error) {
     const fallback = buildFallbackStructuredData(form);
     fallback.runtimeNotice =
       "接口调用失败，已降级为本地最小卡片生成。错误信息：" +
       String(error instanceof Error ? error.message : error);
     updateWithStructuredData(elements, fallback);
-    setButtonLabel(elements.runButton, "AI 解释并结构化");
   }
 }
 
@@ -645,7 +731,32 @@ function handleFallbackGenerate(elements: Elements) {
     return;
   }
 
-  updateWithStructuredData(elements, buildFallbackStructuredData(form));
+  beginGeneration(elements, "正在基于当前内容生成本地卡片草稿…");
+  window.setTimeout(() => {
+    updateWithStructuredData(elements, buildFallbackStructuredData(form));
+  }, 0);
+}
+
+function beginGeneration(elements: Elements, message: string) {
+  isGenerating = true;
+  currentStructuredData = null;
+  currentMarkdown = "";
+  currentUri = "";
+  elements.generationHint.textContent = message;
+  renderOutputs(elements, null, "", "");
+  setButtonDisabled(elements.runButton, true);
+  setButtonDisabled(elements.fallbackButton, true);
+}
+
+function endGeneration(elements: Elements, message: string) {
+  isGenerating = false;
+  elements.generationHint.textContent = message;
+  setButtonDisabled(elements.runButton, false);
+  setButtonDisabled(elements.fallbackButton, false);
+}
+
+function setButtonDisabled(button: HTMLButtonElement, disabled: boolean) {
+  button.disabled = disabled;
 }
 
 async function handleCopyMarkdown(elements: Elements) {
@@ -671,7 +782,7 @@ async function handleCopyUri(elements: Elements) {
 
   try {
     await navigator.clipboard.writeText(currentUri);
-    setButtonLabel(elements.copyUriButton, "已复制 URI");
+    setButtonLabel(elements.copyUriButton, "已复制链接");
   } catch {
     setButtonLabel(elements.copyUriButton, "复制失败");
   }
@@ -684,33 +795,34 @@ function handleGenerateUri(elements: Elements) {
 
   currentUri = buildCurrentUri(elements);
   renderOutputs(elements, currentStructuredData, currentMarkdown, currentUri);
-  setButtonLabel(elements.generateUriButton, "已生成 URI");
+  elements.uriHint.textContent = "已生成可选的外部回退链接，仅在需要交给 Obsidian 时使用。";
+  setButtonLabel(elements.generateUriButton, "已生成");
 }
 
 async function handleWriteVault(elements: Elements) {
   if (!ensureContentReady(elements)) {
-    elements.vaultHint.textContent = "当前没有可写入的 Markdown 内容。";
+    elements.vaultHint.textContent = "当前没有可同步的卡片内容。";
     return;
   }
 
   if (!desktopBridge?.vault) {
-    await triggerUriFallback(elements, "当前环境不支持桌面端 Vault 写入。");
+    await triggerUriFallback(elements, "当前环境不支持 Obsidian 外部存储写入。");
     return;
   }
 
   if (!currentVaultPath) {
-    await triggerUriFallback(elements, "尚未选择 Vault 目录。");
+    await triggerUriFallback(elements, "尚未选择 Obsidian 外部存储目录。");
     return;
   }
 
   const structuredData = currentStructuredData;
   const markdown = currentMarkdown;
   if (!structuredData || !markdown) {
-    elements.vaultHint.textContent = "当前没有可写入的 Markdown 内容。";
+    elements.vaultHint.textContent = "当前没有可同步的卡片内容。";
     return;
   }
 
-  setButtonLabel(elements.writeVaultButton, "写入中...");
+  setButtonLabel(elements.writeVaultButton, "同步中...");
 
   try {
     const result = await desktopBridge.vault.writeMarkdown({
@@ -721,11 +833,11 @@ async function handleWriteVault(elements: Elements) {
     });
 
     elements.vaultHint.textContent = `${result.message} ${result.filePath}`;
-    setButtonLabel(elements.writeVaultButton, result.written ? "已写入" : "已跳过");
+    setButtonLabel(elements.writeVaultButton, result.written ? "已同步" : "已跳过");
   } catch (error) {
     await triggerUriFallback(
       elements,
-      "写入 Vault 失败，已尝试自动切换到 Obsidian URI。",
+      "同步到 Obsidian 失败，已尝试切换到外部回退链接。",
       String(error instanceof Error ? error.message : error),
     );
   }
@@ -740,21 +852,21 @@ async function handleOpenUri(elements: Elements) {
   renderOutputs(elements, currentStructuredData, currentMarkdown, currentUri);
 
   if (!desktopBridge?.obsidian) {
-    elements.vaultHint.textContent = "当前环境不支持桌面端 URI 唤起，请手动复制下方 URI。";
-    setButtonLabel(elements.openUriButton, "仅生成 URI");
+    elements.vaultHint.textContent = "当前环境不支持直接唤起 Obsidian，请先复制外部回退链接。";
+    setButtonLabel(elements.openUriButton, "仅生成链接");
     return false;
   }
 
   try {
     const result = await desktopBridge.obsidian.openUri(currentUri);
     elements.vaultHint.textContent = result.message;
-    setButtonLabel(elements.openUriButton, "已唤起");
+    setButtonLabel(elements.openUriButton, "已打开");
     return true;
   } catch (error) {
     elements.vaultHint.textContent =
-      "Obsidian URI 唤起失败，请手动复制下方 URI。错误：" +
+      "Obsidian 打开失败，请手动复制外部回退链接。错误：" +
       String(error instanceof Error ? error.message : error);
-    setButtonLabel(elements.openUriButton, "唤起失败");
+    setButtonLabel(elements.openUriButton, "打开失败");
     return false;
   }
 }
@@ -779,21 +891,11 @@ function renderValidationError(elements: Elements, message: string) {
   currentStructuredData = null;
   currentMarkdown = "";
   currentUri = "";
-  renderOutputs(
-    elements,
-    {
-      title: "错误",
-      sourceType: "custom",
-      summaryCn: "",
-      explanation: "",
-      keywords: [],
-      flashcards: [],
-      notePath: "",
-      runtimeNotice: message,
-    },
-    "",
-    "",
-  );
+  isGenerating = false;
+  renderOutputs(elements, null, "", "");
+  elements.generationHint.textContent = message;
+  setButtonDisabled(elements.runButton, false);
+  setButtonDisabled(elements.fallbackButton, false);
 }
 
 function updateWithStructuredData(elements: Elements, structuredData: StructuredData) {
@@ -806,7 +908,33 @@ function updateWithStructuredData(elements: Elements, structuredData: Structured
     keywords: document.keywords,
   };
   currentUri = buildObsidianUri(elements.vaultName.value, document.notePath, document.content);
+  persistHistoryEntry(buildHistoryEntry(elements));
+  renderHistory(elements);
   renderOutputs(elements, currentStructuredData, currentMarkdown, currentUri);
+  endGeneration(elements, "当前卡片已生成完成，你可以继续查看预览或同步到外部存储。");
+}
+
+function buildHistoryEntry(elements: Elements): HistoryEntry {
+  if (!currentStructuredData) {
+    throw new Error("Cannot build history entry without current structured data.");
+  }
+
+  const form = collectForm(elements);
+  return {
+    id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    createdAt: new Date().toISOString(),
+    title: currentStructuredData.title,
+    sourceType: currentStructuredData.sourceType,
+    mode: form.mode,
+    rawInput: form.rawInput,
+    context: form.context,
+    folder: form.folder,
+    deckTag: form.deckTag,
+    vaultName: form.vaultName,
+    structuredData: currentStructuredData,
+    markdown: currentMarkdown,
+    uri: currentUri,
+  };
 }
 
 function renderOutputs(
@@ -815,13 +943,34 @@ function renderOutputs(
   markdown: string,
   uri: string,
 ) {
-  elements.jsonOutput.textContent = jsonData
-    ? JSON.stringify(jsonData, null, 2)
-    : "等待生成结构化结果…";
-  elements.markdownOutput.textContent = markdown || "等待生成 Markdown…";
-  elements.uriOutput.textContent = uri || "等待生成 Obsidian URI…";
+  if (isGenerating) {
+    elements.previewTitle.textContent = "正在生成";
+    elements.previewMeta.textContent = "旧预览已清空，等待本次生成完成。";
+    elements.markdownOutput.textContent = "正在生成卡片内容…";
+    if (elements.jsonOutput) {
+      elements.jsonOutput.textContent = "正在生成结构化结果…";
+    }
+    elements.uriOutput.textContent = "将在生成完成后再准备外部回退链接…";
+    elements.uriHint.textContent = "当前还没有生成外部回退链接。";
+    return;
+  }
+
+  if (jsonData) {
+    elements.previewTitle.textContent = jsonData.title || "卡片预览";
+    elements.previewMeta.textContent = `${sourceTypeLabel(jsonData.sourceType)} · ${jsonData.notePath}`;
+  } else {
+    elements.previewTitle.textContent = "卡片预览";
+    elements.previewMeta.textContent = "生成后这里会展示当前卡片内容。";
+  }
+
+  elements.markdownOutput.textContent = markdown || "等待生成卡片内容…";
+  if (elements.jsonOutput) {
+    elements.jsonOutput.textContent = jsonData
+      ? JSON.stringify(jsonData, null, 2)
+      : "等待生成结构化结果…";
+  }
+  elements.uriOutput.textContent = uri || "等待生成外部回退链接…";
   elements.uriHint.textContent = describeUriState(uri);
-  updateDemoStatus(elements);
 }
 
 function ensureContentReady(elements: Elements) {
@@ -841,7 +990,7 @@ function ensureContentReady(elements: Elements) {
 
 function buildCurrentUri(elements: Elements) {
   if (!currentStructuredData || !currentMarkdown) {
-    throw new Error("当前缺少可用的 URI 内容。");
+    throw new Error("当前缺少可用的外部回退链接内容。");
   }
 
   return buildObsidianUri(elements.vaultName.value, currentStructuredData.notePath, currentMarkdown);
@@ -852,80 +1001,59 @@ async function triggerUriFallback(elements: Elements, reason: string, originalEr
   const details = originalError ? ` 原始错误：${originalError}` : "";
 
   if (opened) {
-    elements.vaultHint.textContent = `${reason} 已成功唤起 Obsidian URI 回退。${details}`;
+    elements.vaultHint.textContent = `${reason} 已成功切换到外部回退链接。${details}`;
     setButtonLabel(elements.writeVaultButton, "已回退");
     return;
   }
 
-  elements.vaultHint.textContent = `${reason} 已生成 URI 预览，可手动继续。${details}`;
-  setButtonLabel(elements.writeVaultButton, "写入失败");
+  elements.vaultHint.textContent = `${reason} 已生成外部回退链接，可手动继续。${details}`;
+  setButtonLabel(elements.writeVaultButton, "同步失败");
 }
 
 function describeUriState(uri: string) {
   if (!uri) {
-    return "当前还没有生成 URI。";
+    return "当前还没有生成外部回退链接。";
   }
 
   if (uri.length > 1800) {
-    return `当前 URI 长度约 ${uri.length} 个字符，在部分系统环境中可能偏长，建议优先使用 Vault 直写。`;
+    return `当前链接长度约 ${uri.length} 个字符，内容较长时建议优先使用 Obsidian 外部存储同步。`;
   }
 
-  return `当前 URI 长度约 ${uri.length} 个字符，可作为写入失败时的保底方案。`;
+  return `当前链接长度约 ${uri.length} 个字符，仅在需要交给 Obsidian 创建时使用。`;
 }
 
-function updateDemoStatus(elements: Elements) {
-  const form = collectForm(elements);
-  const hasContent = Boolean(form.rawInput);
-  const hasVault = Boolean(currentVaultPath);
-  const aiConfigured = Boolean(form.baseUrl && form.model && form.apiKey);
+function sourceTypeLabel(sourceType: SourceType) {
+  const labels: Record<SourceType, string> = {
+    word: "单词",
+    phrase: "词组",
+    sentence: "句子",
+    custom: "自定义知识",
+  };
 
-  if (hasVault) {
-    setMiniStatus(elements.vaultStatus, "已就绪", "ready");
-  } else {
-    setMiniStatus(elements.vaultStatus, "待选择", "waiting");
-  }
-
-  if (hasContent) {
-    setMiniStatus(elements.contentStatus, "可生成", "ready");
-  } else {
-    setMiniStatus(elements.contentStatus, "待输入", "waiting");
-  }
-
-  if (form.mode === "direct") {
-    setMiniStatus(elements.aiStatus, "直接入库", "neutral");
-  } else if (aiConfigured) {
-    setMiniStatus(elements.aiStatus, "AI 就绪", "ready");
-  } else {
-    setMiniStatus(elements.aiStatus, "将降级生成", "warning");
-  }
-
-  elements.readinessSummary.textContent = buildReadinessSummary(hasContent, hasVault, form.mode, aiConfigured);
+  return labels[sourceType];
 }
 
-function buildReadinessSummary(
-  hasContent: boolean,
-  hasVault: boolean,
-  mode: RunMode,
-  aiConfigured: boolean,
-) {
-  if (!hasContent) {
-    return "先选择一个演示样例或输入你自己的内容，就可以开始演示。";
+function formatRelativeDate(value: string) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return "刚刚";
   }
 
-  if (mode === "ai" && !aiConfigured) {
-    return "当前 AI 配置还不完整，点击生成时会自动降级为本地最小卡片，适合演示无 Key 的兜底流程。";
-  }
-
-  if (!hasVault) {
-    return "当前已经可以演示 AI 解释、结构化结果和 Markdown 预览；如果要演示一键入库，请先选择 Vault。";
-  }
-
-  return "当前已经具备完整的 V1 演示条件，可以从输入一路展示到 Vault 写入或 URI 回退。";
+  return date.toLocaleString("zh-CN", {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
 }
 
-function setMiniStatus(element: HTMLElement, text: string, state: "ready" | "waiting" | "warning" | "neutral") {
-  element.textContent = text;
-  element.dataset.state = state;
+function escapeHtml(value: string) {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
 }
 
 function setButtonLabel(button: HTMLButtonElement, label: string) {
@@ -950,5 +1078,5 @@ function setButtonLabel(button: HTMLButtonElement, label: string) {
 function extractVaultName(vaultPath: string) {
   const normalized = vaultPath.replace(/\\/g, "/").replace(/\/+$/, "");
   const segments = normalized.split("/").filter(Boolean);
-  return segments.at(-1) || "My English Vault";
+  return segments.at(-1) || "My Knowledge Vault";
 }
