@@ -10,13 +10,19 @@ import type {
   LocalAppSettings,
   LocalCardRecord,
   LocalLibrarySnapshot,
+  ReviewRating,
 } from "../shared/local-library-types.js";
 import { buildMarkdownDocument } from "../shared/markdown-generator.js";
 import type { FormState, RunMode, SourceType, StructuredData } from "../shared/flashcard-types.js";
 import type { VaultConfig } from "../shared/vault-types.js";
 import { requestStructuredData } from "./services/ai-client.js";
 
-type AppPage = "capture" | "settings";
+type AppPage = "capture" | "review" | "settings";
+
+type StudyQueueEntry = {
+  card: LocalCardRecord;
+  queueType: "new" | "review";
+};
 
 type DemoPreset = {
   id: string;
@@ -31,8 +37,10 @@ type DemoPreset = {
 
 type Elements = {
   navCaptureButton: HTMLButtonElement;
+  navReviewButton: HTMLButtonElement;
   navSettingsButton: HTMLButtonElement;
   capturePage: HTMLElement;
+  reviewPage: HTMLElement;
   settingsPage: HTMLElement;
   debugSection: HTMLElement | null;
   presetButtons: HTMLButtonElement[];
@@ -52,6 +60,26 @@ type Elements = {
   copyMarkdownButton: HTMLButtonElement;
   historyList: HTMLDivElement;
   historyEmpty: HTMLParagraphElement;
+  reviewCountMetric: HTMLParagraphElement;
+  newCountMetric: HTMLParagraphElement;
+  progressMetric: HTMLParagraphElement;
+  reviewQueueList: HTMLDivElement;
+  reviewQueueEmpty: HTMLParagraphElement;
+  studyStageBadge: HTMLSpanElement;
+  studyCardTitle: HTMLHeadingElement;
+  studyCardMeta: HTMLParagraphElement;
+  studyCardFront: HTMLDivElement;
+  studyAnswerPanel: HTMLDivElement;
+  studyCardBack: HTMLParagraphElement;
+  studySummary: HTMLParagraphElement;
+  studyExplanation: HTMLParagraphElement;
+  studyHintCard: HTMLDivElement;
+  studyHintText: HTMLParagraphElement;
+  revealAnswerButton: HTMLButtonElement;
+  forgotButton: HTMLButtonElement;
+  fuzzyButton: HTMLButtonElement;
+  rememberedButton: HTMLButtonElement;
+  studyStatusHint: HTMLParagraphElement;
   baseUrl: HTMLInputElement;
   model: HTMLInputElement;
   apiKey: HTMLInputElement;
@@ -90,7 +118,7 @@ const buttonTimers = new WeakMap<HTMLButtonElement, number>();
 const desktopBridge = window.desktopBridge;
 const appInfo = desktopBridge?.appInfo ?? {
   name: "AI Flashcard",
-  phase: "V2 Step 2",
+  phase: "V2 Step 3",
   targetPlatforms: ["macOS", "Windows"],
   stack: ["Electron", "TypeScript", "Vite"],
 };
@@ -135,6 +163,10 @@ let currentVaultPath = "";
 let currentPage: AppPage = "capture";
 let localLibrarySnapshot: LocalLibrarySnapshot | null = null;
 let historyCards: LocalCardRecord[] = [];
+let studyQueueEntries: StudyQueueEntry[] = [];
+let currentStudyIndex = 0;
+let studyAnswerVisible = false;
+let studyHintVisible = false;
 let isGenerating = false;
 
 bootstrap();
@@ -151,6 +183,7 @@ function bootstrap() {
   hydrateDefaults(elements);
   renderOutputs(elements, null, "", "");
   renderHistory(elements);
+  rebuildStudyQueue(elements);
   bindEvents(elements);
   switchPage(elements, "capture");
   void hydrateLocalLibrary(elements);
@@ -174,6 +207,7 @@ function renderAppShell() {
 
       <section class="nav-shell">
         <button id="navCaptureButton" class="nav-chip nav-chip-active" type="button">录入与预览</button>
+        <button id="navReviewButton" class="nav-chip" type="button">学习与复习</button>
         <button id="navSettingsButton" class="nav-chip" type="button">设置</button>
       </section>
 
@@ -308,6 +342,75 @@ function renderAppShell() {
         </section>
       </section>
 
+      <section id="reviewPage" class="page-shell page-hidden">
+        <section class="page-grid">
+          <section class="panel">
+            <div class="panel-head">
+              <h2>今日任务</h2>
+              <p>这里集中展示今天应该先复习哪些卡片，以及还能新学多少张。</p>
+            </div>
+
+            <div class="review-metrics">
+              <article class="metric-card">
+                <span>待复习</span>
+                <p id="reviewCountMetric">0</p>
+              </article>
+              <article class="metric-card">
+                <span>待新学</span>
+                <p id="newCountMetric">0</p>
+              </article>
+              <article class="metric-card">
+                <span>当前进度</span>
+                <p id="progressMetric">0 / 0</p>
+              </article>
+            </div>
+
+            <div class="panel-head compact">
+              <h3>今日队列</h3>
+              <p>优先展示到期复习卡，再补足今日新学卡片。</p>
+            </div>
+
+            <p id="reviewQueueEmpty" class="empty-state">当前还没有可学习的卡片，先去录入并保存几张卡片吧。</p>
+            <div id="reviewQueueList" class="history-list"></div>
+          </section>
+
+          <section class="panel">
+            <div class="panel-head">
+              <span id="studyStageBadge" class="stage-badge">待开始</span>
+              <h2 id="studyCardTitle">学习与复习</h2>
+              <p id="studyCardMeta">加载本地知识库后，这里会展示今日第一张卡片。</p>
+            </div>
+
+            <div id="studyCardFront" class="study-surface">
+              暂无卡片，先在录入页保存几张卡片到本地知识库。
+            </div>
+
+            <div id="studyAnswerPanel" class="study-answer-panel" hidden>
+              <p id="studyCardBack" class="study-answer-line"></p>
+              <p id="studySummary" class="study-detail-line"></p>
+              <p id="studyExplanation" class="study-detail-line"></p>
+            </div>
+
+            <div id="studyHintCard" class="debug-card subtle" hidden>
+              <div class="panel-head compact">
+                <h3>回忆提示</h3>
+                <p>你选择了“模糊”，先看一眼提示，再决定是否继续记为模糊。</p>
+              </div>
+              <p id="studyHintText" class="persist-hint"></p>
+            </div>
+
+            <div class="action-row">
+              <button id="revealAnswerButton" class="secondary" type="button">显示答案</button>
+              <button id="forgotButton" class="ghost" type="button">不记得</button>
+              <button id="fuzzyButton" class="ghost" type="button">模糊</button>
+              <button id="rememberedButton" class="primary" type="button">记得</button>
+            </div>
+
+            <p id="studyStatusHint" class="status-hint">完成加载后，这里会提示当前学习动作和下一步反馈。</p>
+          </section>
+        </section>
+      </section>
+
       <section id="settingsPage" class="page-shell page-hidden">
         <section class="page-grid">
           <section class="panel">
@@ -424,8 +527,10 @@ function renderAppShell() {
 function collectElements(): Elements {
   return {
     navCaptureButton: byId<HTMLButtonElement>("navCaptureButton"),
+    navReviewButton: byId<HTMLButtonElement>("navReviewButton"),
     navSettingsButton: byId<HTMLButtonElement>("navSettingsButton"),
     capturePage: byId<HTMLElement>("capturePage"),
+    reviewPage: byId<HTMLElement>("reviewPage"),
     settingsPage: byId<HTMLElement>("settingsPage"),
     debugSection: document.getElementById("debugSection"),
     presetButtons: Array.from(document.querySelectorAll<HTMLButtonElement>("[data-demo-preset]")),
@@ -445,6 +550,26 @@ function collectElements(): Elements {
     copyMarkdownButton: byId<HTMLButtonElement>("copyMarkdownButton"),
     historyList: byId<HTMLDivElement>("historyList"),
     historyEmpty: byId<HTMLParagraphElement>("historyEmpty"),
+    reviewCountMetric: byId<HTMLParagraphElement>("reviewCountMetric"),
+    newCountMetric: byId<HTMLParagraphElement>("newCountMetric"),
+    progressMetric: byId<HTMLParagraphElement>("progressMetric"),
+    reviewQueueList: byId<HTMLDivElement>("reviewQueueList"),
+    reviewQueueEmpty: byId<HTMLParagraphElement>("reviewQueueEmpty"),
+    studyStageBadge: byId<HTMLSpanElement>("studyStageBadge"),
+    studyCardTitle: byId<HTMLHeadingElement>("studyCardTitle"),
+    studyCardMeta: byId<HTMLParagraphElement>("studyCardMeta"),
+    studyCardFront: byId<HTMLDivElement>("studyCardFront"),
+    studyAnswerPanel: byId<HTMLDivElement>("studyAnswerPanel"),
+    studyCardBack: byId<HTMLParagraphElement>("studyCardBack"),
+    studySummary: byId<HTMLParagraphElement>("studySummary"),
+    studyExplanation: byId<HTMLParagraphElement>("studyExplanation"),
+    studyHintCard: byId<HTMLDivElement>("studyHintCard"),
+    studyHintText: byId<HTMLParagraphElement>("studyHintText"),
+    revealAnswerButton: byId<HTMLButtonElement>("revealAnswerButton"),
+    forgotButton: byId<HTMLButtonElement>("forgotButton"),
+    fuzzyButton: byId<HTMLButtonElement>("fuzzyButton"),
+    rememberedButton: byId<HTMLButtonElement>("rememberedButton"),
+    studyStatusHint: byId<HTMLParagraphElement>("studyStatusHint"),
     baseUrl: byId<HTMLInputElement>("baseUrl"),
     model: byId<HTMLInputElement>("model"),
     apiKey: byId<HTMLInputElement>("apiKey"),
@@ -490,10 +615,14 @@ function hydrateDefaults(elements: Elements) {
   elements.folderSummary.textContent = "分类加载中…";
   elements.templateSummary.textContent = "模板加载中…";
   elements.saveLocalButton.disabled = true;
+  elements.forgotButton.disabled = true;
+  elements.fuzzyButton.disabled = true;
+  elements.rememberedButton.disabled = true;
 }
 
 function bindEvents(elements: Elements) {
   elements.navCaptureButton.addEventListener("click", () => switchPage(elements, "capture"));
+  elements.navReviewButton.addEventListener("click", () => switchPage(elements, "review"));
   elements.navSettingsButton.addEventListener("click", () => switchPage(elements, "settings"));
   elements.presetButtons.forEach((button) => {
     button.addEventListener("click", () => handleApplyPreset(elements, button.dataset.demoPreset || ""));
@@ -527,6 +656,16 @@ function bindEvents(elements: Elements) {
   elements.openUriButton.addEventListener("click", () => {
     void handleOpenUri(elements);
   });
+  elements.revealAnswerButton.addEventListener("click", () => handleRevealAnswer(elements));
+  elements.forgotButton.addEventListener("click", () => {
+    void handleStudyFeedback(elements, "forgot");
+  });
+  elements.fuzzyButton.addEventListener("click", () => {
+    void handleStudyFeedback(elements, "fuzzy");
+  });
+  elements.rememberedButton.addEventListener("click", () => {
+    void handleStudyFeedback(elements, "remembered");
+  });
   elements.sourceType.addEventListener("change", () => syncSuggestedFolder(elements));
 }
 
@@ -546,16 +685,20 @@ async function hydrateLocalLibrary(elements: Elements) {
   applySettingsToFields(elements, snapshot.settings, true);
   renderLocalLibrarySummary(elements, snapshot);
   renderHistory(elements);
+  rebuildStudyQueue(elements);
   elements.saveLocalButton.disabled = false;
 }
 
 function switchPage(elements: Elements, page: AppPage) {
   currentPage = page;
   const captureActive = page === "capture";
+  const reviewActive = page === "review";
   elements.capturePage.classList.toggle("page-hidden", !captureActive);
-  elements.settingsPage.classList.toggle("page-hidden", captureActive);
+  elements.reviewPage.classList.toggle("page-hidden", !reviewActive);
+  elements.settingsPage.classList.toggle("page-hidden", captureActive || reviewActive);
   elements.navCaptureButton.classList.toggle("nav-chip-active", captureActive);
-  elements.navSettingsButton.classList.toggle("nav-chip-active", !captureActive);
+  elements.navReviewButton.classList.toggle("nav-chip-active", reviewActive);
+  elements.navSettingsButton.classList.toggle("nav-chip-active", page === "settings");
 }
 
 async function hydrateVaultState(elements: Elements) {
@@ -629,6 +772,130 @@ function renderLocalLibrarySummary(elements: Elements, snapshot: LocalLibrarySna
     `当前已准备 ${snapshot.stats.totalTemplates} 个模板：${snapshot.templates.map((item) => item.name).join("、")}`;
 }
 
+function rebuildStudyQueue(elements: Elements) {
+  studyQueueEntries = buildStudyQueue(localLibrarySnapshot);
+
+  if (studyQueueEntries.length === 0) {
+    currentStudyIndex = 0;
+    studyAnswerVisible = false;
+    studyHintVisible = false;
+    renderStudyQueueList(elements);
+    renderStudyCard(elements);
+    return;
+  }
+
+  currentStudyIndex = Math.min(currentStudyIndex, studyQueueEntries.length - 1);
+  renderStudyQueueList(elements);
+  renderStudyCard(elements);
+}
+
+function buildStudyQueue(snapshot: LocalLibrarySnapshot | null): StudyQueueEntry[] {
+  if (!snapshot) {
+    return [];
+  }
+
+  const now = Date.now();
+  const dueCards: StudyQueueEntry[] = snapshot.cards
+    .filter((card) => card.reviewState !== "new" && new Date(card.reviewDueAt).getTime() <= now)
+    .sort((left, right) => left.reviewDueAt.localeCompare(right.reviewDueAt))
+    .slice(0, snapshot.settings.dailyReviewLimit)
+    .map((card) => ({ card, queueType: "review" as const }));
+
+  const newCards: StudyQueueEntry[] = snapshot.cards
+    .filter((card) => card.reviewState === "new")
+    .sort((left, right) => left.createdAt.localeCompare(right.createdAt))
+    .slice(0, snapshot.settings.dailyNewLimit)
+    .map((card) => ({ card, queueType: "new" as const }));
+
+  return dueCards.concat(newCards);
+}
+
+function renderStudyQueueList(elements: Elements) {
+  const reviewCount = studyQueueEntries.filter((item) => item.queueType === "review").length;
+  const newCount = studyQueueEntries.filter((item) => item.queueType === "new").length;
+  const currentPosition = studyQueueEntries.length === 0 ? 0 : Math.min(currentStudyIndex + 1, studyQueueEntries.length);
+
+  elements.reviewCountMetric.textContent = String(reviewCount);
+  elements.newCountMetric.textContent = String(newCount);
+  elements.progressMetric.textContent = `${currentPosition} / ${studyQueueEntries.length}`;
+
+  if (studyQueueEntries.length === 0) {
+    elements.reviewQueueEmpty.hidden = false;
+    elements.reviewQueueList.innerHTML = "";
+    return;
+  }
+
+  elements.reviewQueueEmpty.hidden = true;
+  elements.reviewQueueList.innerHTML = studyQueueEntries
+    .map((entry, index) => {
+      const queueLabel = entry.queueType === "review" ? "待复习" : "待新学";
+      const activeClass = index === currentStudyIndex ? " history-item-active" : "";
+      return `
+        <button class="history-item${activeClass}" type="button" data-study-card-id="${entry.card.id}">
+          <span class="history-item-title">${escapeHtml(entry.card.title)}</span>
+          <span class="history-item-meta">${queueLabel} · ${sourceTypeLabel(entry.card.sourceType)} · ${escapeHtml(entry.card.folderName)}</span>
+          <span class="history-item-snippet">${escapeHtml(readFrontPrompt(entry.card))}</span>
+        </button>
+      `;
+    })
+    .join("");
+
+  elements.reviewQueueList.querySelectorAll<HTMLButtonElement>("[data-study-card-id]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const cardId = button.dataset.studyCardId || "";
+      const nextIndex = studyQueueEntries.findIndex((entry) => entry.card.id === cardId);
+      if (nextIndex < 0) {
+        return;
+      }
+
+      currentStudyIndex = nextIndex;
+      studyAnswerVisible = false;
+      studyHintVisible = false;
+      renderStudyQueueList(elements);
+      renderStudyCard(elements);
+    });
+  });
+}
+
+function renderStudyCard(elements: Elements) {
+  const currentEntry = studyQueueEntries[currentStudyIndex];
+
+  if (!currentEntry) {
+    elements.studyStageBadge.textContent = "今日完成";
+    elements.studyCardTitle.textContent = "今天暂时没有待学卡片";
+    elements.studyCardMeta.textContent = "你可以先去录入页继续保存卡片，或者明天再回来复习。";
+    elements.studyCardFront.textContent = "当前队列为空。";
+    elements.studyAnswerPanel.hidden = true;
+    elements.studyHintCard.hidden = true;
+    elements.studyStatusHint.textContent = "今天的学习与复习队列已经处理完了。";
+    elements.revealAnswerButton.disabled = true;
+    elements.forgotButton.disabled = true;
+    elements.fuzzyButton.disabled = true;
+    elements.rememberedButton.disabled = true;
+    return;
+  }
+
+  const { card, queueType } = currentEntry;
+  elements.studyStageBadge.textContent = queueType === "review" ? "待复习" : "待新学";
+  elements.studyCardTitle.textContent = card.title;
+  elements.studyCardMeta.textContent =
+    `${sourceTypeLabel(card.sourceType)} · ${card.folderName} · 第 ${currentStudyIndex + 1} 张 / 共 ${studyQueueEntries.length} 张`;
+  elements.studyCardFront.textContent = readFrontPrompt(card);
+  elements.studyCardBack.textContent = `答案：${readBackPrompt(card)}`;
+  elements.studySummary.textContent = `速记：${card.summary || "待补充"}`;
+  elements.studyExplanation.textContent = `解释：${card.explanation || "待补充"}`;
+  elements.studyHintText.textContent = card.hint || "当前这张卡片还没有单独提示。";
+  elements.studyAnswerPanel.hidden = !studyAnswerVisible;
+  elements.studyHintCard.hidden = !studyHintVisible;
+  elements.revealAnswerButton.disabled = studyAnswerVisible;
+  elements.forgotButton.disabled = !studyAnswerVisible;
+  elements.fuzzyButton.disabled = !studyAnswerVisible;
+  elements.rememberedButton.disabled = !studyAnswerVisible;
+  elements.studyStatusHint.textContent = studyHintVisible
+    ? "提示已展开。如果仍然觉得模糊，再点一次“模糊”记录反馈，或改选“不记得 / 记得”。"
+    : "先回忆答案，再点“显示答案”，之后用三档反馈更新这张卡片。";
+}
+
 function renderHistory(elements: Elements) {
   if (historyCards.length === 0) {
     elements.historyEmpty.hidden = false;
@@ -682,11 +949,65 @@ function handleHistorySelect(elements: Elements, entryId: string) {
   switchPage(elements, "capture");
 }
 
+function handleRevealAnswer(elements: Elements) {
+  if (!studyQueueEntries[currentStudyIndex]) {
+    return;
+  }
+
+  studyAnswerVisible = true;
+  studyHintVisible = false;
+  renderStudyCard(elements);
+}
+
+async function handleStudyFeedback(elements: Elements, rating: ReviewRating) {
+  const currentEntry = studyQueueEntries[currentStudyIndex];
+
+  if (!currentEntry || !desktopBridge?.localLibrary) {
+    return;
+  }
+
+  if (!studyAnswerVisible) {
+    elements.studyStatusHint.textContent = "请先显示答案，再选择反馈。";
+    return;
+  }
+
+  if (rating === "fuzzy" && !studyHintVisible) {
+    studyHintVisible = true;
+    renderStudyCard(elements);
+    return;
+  }
+
+  const currentCardIdForReview = currentEntry.card.id;
+  elements.studyStatusHint.textContent = "正在记录当前反馈并更新下一次复习时间…";
+  setStudyButtonsDisabled(elements, true);
+
+  try {
+    const result = await desktopBridge.localLibrary.reviewCard({
+      cardId: currentCardIdForReview,
+      rating,
+    });
+
+    localLibrarySnapshot = result.snapshot;
+    historyCards = result.snapshot.cards;
+    renderLocalLibrarySummary(elements, result.snapshot);
+    renderHistory(elements);
+    studyAnswerVisible = false;
+    studyHintVisible = false;
+    rebuildStudyQueue(elements);
+    elements.studyStatusHint.textContent = result.message;
+  } catch (error) {
+    elements.studyStatusHint.textContent =
+      "记录复习反馈失败：" + String(error instanceof Error ? error.message : error);
+    setStudyButtonsDisabled(elements, false);
+  }
+}
+
 async function handleSaveSettings(elements: Elements) {
   if (desktopBridge?.localLibrary) {
     const snapshot = await desktopBridge.localLibrary.saveSettings(buildSettingsPayload(elements));
     localLibrarySnapshot = snapshot;
     renderLocalLibrarySummary(elements, snapshot);
+    rebuildStudyQueue(elements);
   }
 
   elements.persistHint.textContent = "设置已保存到当前桌面应用的本地知识库。";
@@ -714,6 +1035,13 @@ function handleApplyPreset(elements: Elements, presetId: string) {
   elements.deckTag.value = preset.deckTag;
   elements.context.value = preset.context;
   elements.generationHint.textContent = `已载入“${preset.label}”调试样例，可继续生成预览。`;
+}
+
+function setStudyButtonsDisabled(elements: Elements, disabled: boolean) {
+  elements.revealAnswerButton.disabled = disabled || studyAnswerVisible;
+  elements.forgotButton.disabled = disabled || !studyAnswerVisible;
+  elements.fuzzyButton.disabled = disabled || !studyAnswerVisible;
+  elements.rememberedButton.disabled = disabled || !studyAnswerVisible;
 }
 
 async function handleChooseVault(elements: Elements) {
@@ -830,6 +1158,7 @@ async function handleSaveLocalCard(elements: Elements) {
     historyCards = result.snapshot.cards;
     renderLocalLibrarySummary(elements, result.snapshot);
     renderHistory(elements);
+    rebuildStudyQueue(elements);
     elements.generationHint.textContent = result.message;
     elements.persistHint.textContent = "当前卡片已经写入本地知识库，后续可继续扩展为学习与复习数据。";
     setButtonLabel(elements.saveLocalButton, "已保存");
@@ -1088,6 +1417,14 @@ function sourceTypeLabel(sourceType: SourceType) {
   };
 
   return labels[sourceType];
+}
+
+function readFrontPrompt(card: LocalCardRecord) {
+  return card.flashcards[0]?.front || card.summary || card.title;
+}
+
+function readBackPrompt(card: LocalCardRecord) {
+  return card.flashcards[0]?.back || card.summary || "待补充答案";
 }
 
 function formatRelativeDate(value: string) {

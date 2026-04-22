@@ -8,6 +8,7 @@ const desktopBridge: DesktopBridgeApi = {
     loadSnapshot: () => ipcRenderer.invoke("local-library:load-snapshot"),
     saveSettings: (payload) => ipcRenderer.invoke("local-library:save-settings", payload),
     saveCard: (payload) => ipcRenderer.invoke("local-library:save-card", payload),
+    reviewCard: (payload) => ipcRenderer.invoke("local-library:review-card", payload),
   },
   vault: {
     loadConfig: () => ipcRenderer.invoke("vault:load-config"),

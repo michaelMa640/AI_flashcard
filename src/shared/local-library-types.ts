@@ -4,6 +4,7 @@ export type StorageChannel = "local" | "icloud-backup" | "obsidian-export";
 export type TemplateField = "summary" | "explanation" | "hint" | "flashcards" | "keywords";
 export type PromptStrategy = "english" | "career" | "general";
 export type ReviewState = "new" | "learning" | "review";
+export type ReviewRating = "forgot" | "fuzzy" | "remembered";
 
 export type LocalAppSettings = PersistedSettings & {
   storageChannel: StorageChannel;
@@ -86,6 +87,17 @@ export type SaveCardInput = {
 };
 
 export type SaveCardResult = {
+  card: LocalCardRecord;
+  snapshot: LocalLibrarySnapshot;
+  message: string;
+};
+
+export type ReviewCardInput = {
+  cardId: string;
+  rating: ReviewRating;
+};
+
+export type ReviewCardResult = {
   card: LocalCardRecord;
   snapshot: LocalLibrarySnapshot;
   message: string;
