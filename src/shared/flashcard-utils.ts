@@ -11,6 +11,7 @@ export function buildFallbackStructuredData(form: FormState): StructuredData {
     sourceType: form.sourceType,
     summaryCn,
     explanation,
+    hint: fallbackHint(form),
     keywords: fallbackKeywords(form),
     flashcards: buildFallbackFlashcards(title, form.rawInput, form.sourceType),
     notePath: buildNotePath(folder, title),
@@ -124,6 +125,22 @@ function fallbackKeywords(form: FormState) {
     : [];
 
   return [...new Set([...base, ...contextWords])];
+}
+
+function fallbackHint(form: FormState) {
+  if (form.sourceType === "word") {
+    return "先回忆这个词最常见的中文义项，再想它通常搭配什么词。";
+  }
+
+  if (form.sourceType === "phrase") {
+    return "先抓住短语的整体语义，再回忆它常出现的情境。";
+  }
+
+  if (form.sourceType === "sentence") {
+    return "先想这句话的大意，再回忆最值得记住的表达亮点。";
+  }
+
+  return "先回忆这条知识的核心定义，再想一个典型应用场景。";
 }
 
 function buildFallbackFlashcards(title: string, rawInput: string, sourceType: SourceType): Flashcard[] {

@@ -2,7 +2,7 @@
   "name": "ai-flashcard",
   "version": "0.1.0",
   "private": true,
-  "description": "Desktop-first AI flashcard tool for Obsidian",
+  "description": "Desktop-first local knowledge flashcard tool with optional Obsidian export",
   "main": "dist-electron/electron/main.js",
   "type": "module",
   "scripts": {

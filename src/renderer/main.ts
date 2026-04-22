@@ -2,8 +2,17 @@ import "./style.css";
 import { DEFAULT_SYSTEM_PROMPT } from "../shared/ai-prompt.js";
 import type { DesktopBridgeApi } from "../shared/desktop-bridge.js";
 import { buildFallbackStructuredData, buildObsidianUri, folderFromType } from "../shared/flashcard-utils.js";
+import {
+  createDefaultLocalAppSettings,
+  defaultFolderNameForSourceType,
+} from "../shared/local-library-defaults.js";
+import type {
+  LocalAppSettings,
+  LocalCardRecord,
+  LocalLibrarySnapshot,
+} from "../shared/local-library-types.js";
 import { buildMarkdownDocument } from "../shared/markdown-generator.js";
-import type { FormState, PersistedSettings, RunMode, SourceType, StructuredData } from "../shared/flashcard-types.js";
+import type { FormState, RunMode, SourceType, StructuredData } from "../shared/flashcard-types.js";
 import type { VaultConfig } from "../shared/vault-types.js";
 import { requestStructuredData } from "./services/ai-client.js";
 
@@ -18,22 +27,6 @@ type DemoPreset = {
   folder: string;
   deckTag: string;
   context: string;
-};
-
-type HistoryEntry = {
-  id: string;
-  createdAt: string;
-  title: string;
-  sourceType: SourceType;
-  mode: RunMode;
-  rawInput: string;
-  context: string;
-  folder: string;
-  deckTag: string;
-  vaultName: string;
-  structuredData: StructuredData;
-  markdown: string;
-  uri: string;
 };
 
 type Elements = {
@@ -55,6 +48,7 @@ type Elements = {
   previewTitle: HTMLHeadingElement;
   previewMeta: HTMLParagraphElement;
   markdownOutput: HTMLPreElement;
+  saveLocalButton: HTMLButtonElement;
   copyMarkdownButton: HTMLButtonElement;
   historyList: HTMLDivElement;
   historyEmpty: HTMLParagraphElement;
@@ -62,6 +56,8 @@ type Elements = {
   model: HTMLInputElement;
   apiKey: HTMLInputElement;
   systemPrompt: HTMLTextAreaElement;
+  dailyNewLimit: HTMLInputElement;
+  dailyReviewLimit: HTMLInputElement;
   vaultName: HTMLInputElement;
   vaultPath: HTMLInputElement;
   saveSettingsButton: HTMLButtonElement;
@@ -76,6 +72,9 @@ type Elements = {
   openUriButton: HTMLButtonElement;
   generateUriButton: HTMLButtonElement;
   persistHint: HTMLParagraphElement;
+  localLibraryHint: HTMLParagraphElement;
+  folderSummary: HTMLParagraphElement;
+  templateSummary: HTMLParagraphElement;
   jsonPanel: HTMLElement | null;
   jsonOutput: HTMLPreElement | null;
 };
@@ -86,15 +85,12 @@ declare global {
   }
 }
 
-const SETTINGS_STORAGE_KEY = "flashcard-obsidian-desktop-settings";
-const HISTORY_STORAGE_KEY = "flashcard-local-history";
-const HISTORY_LIMIT = 24;
 const DEBUG_MODE = new URLSearchParams(window.location.search).get("debug") === "1";
 const buttonTimers = new WeakMap<HTMLButtonElement, number>();
 const desktopBridge = window.desktopBridge;
 const appInfo = desktopBridge?.appInfo ?? {
   name: "AI Flashcard",
-  phase: "V2 Step 1",
+  phase: "V2 Step 2",
   targetPlatforms: ["macOS", "Windows"],
   stack: ["Electron", "TypeScript", "Vite"],
 };
@@ -134,9 +130,11 @@ const DEMO_PRESETS: DemoPreset[] = [
 let currentStructuredData: StructuredData | null = null;
 let currentMarkdown = "";
 let currentUri = "";
+let currentCardId = "";
 let currentVaultPath = "";
 let currentPage: AppPage = "capture";
-let historyEntries: HistoryEntry[] = [];
+let localLibrarySnapshot: LocalLibrarySnapshot | null = null;
+let historyCards: LocalCardRecord[] = [];
 let isGenerating = false;
 
 bootstrap();
@@ -150,14 +148,12 @@ function bootstrap() {
 
   root.innerHTML = renderAppShell();
   const elements = collectElements();
-  const saved = loadSettings();
-
-  historyEntries = loadHistory();
-  hydrateDefaults(elements, saved);
+  hydrateDefaults(elements);
   renderOutputs(elements, null, "", "");
   renderHistory(elements);
   bindEvents(elements);
   switchPage(elements, "capture");
+  void hydrateLocalLibrary(elements);
   void hydrateVaultState(elements);
 }
 
@@ -281,6 +277,7 @@ function renderAppShell() {
             <pre id="markdownOutput" class="code-block preview-block">等待生成卡片内容…</pre>
 
             <div class="action-row">
+              <button id="saveLocalButton" class="primary" type="button">保存到本地知识库</button>
               <button id="copyMarkdownButton" class="secondary" type="button">复制卡片内容</button>
             </div>
 
@@ -341,6 +338,18 @@ function renderAppShell() {
               <textarea id="systemPrompt" rows="12"></textarea>
             </label>
 
+            <div class="field-row">
+              <label class="field">
+                <span>每日新学数量</span>
+                <input id="dailyNewLimit" type="number" min="1" step="1" placeholder="10" />
+              </label>
+
+              <label class="field">
+                <span>每日复习数量</span>
+                <input id="dailyReviewLimit" type="number" min="1" step="1" placeholder="30" />
+              </label>
+            </div>
+
             <div class="action-row">
               <button id="saveSettingsButton" class="secondary" type="button">保存设置</button>
               <button id="resetPromptButton" class="ghost" type="button">恢复默认 Prompt</button>
@@ -356,6 +365,9 @@ function renderAppShell() {
             <article class="channel-card">
               <strong>本地数据</strong>
               <p id="dataStrategyHint">当前默认策略：本地优先。当前录入历史保存在应用本地存储中。</p>
+              <p id="localLibraryHint" class="channel-meta">启动后会在这里显示本地知识库统计信息。</p>
+              <p id="folderSummary" class="channel-meta">分类加载中…</p>
+              <p id="templateSummary" class="channel-meta">模板加载中…</p>
             </article>
 
             <article class="channel-card">
@@ -429,6 +441,7 @@ function collectElements(): Elements {
     previewTitle: byId<HTMLHeadingElement>("previewTitle"),
     previewMeta: byId<HTMLParagraphElement>("previewMeta"),
     markdownOutput: byId<HTMLPreElement>("markdownOutput"),
+    saveLocalButton: byId<HTMLButtonElement>("saveLocalButton"),
     copyMarkdownButton: byId<HTMLButtonElement>("copyMarkdownButton"),
     historyList: byId<HTMLDivElement>("historyList"),
     historyEmpty: byId<HTMLParagraphElement>("historyEmpty"),
@@ -436,6 +449,8 @@ function collectElements(): Elements {
     model: byId<HTMLInputElement>("model"),
     apiKey: byId<HTMLInputElement>("apiKey"),
     systemPrompt: byId<HTMLTextAreaElement>("systemPrompt"),
+    dailyNewLimit: byId<HTMLInputElement>("dailyNewLimit"),
+    dailyReviewLimit: byId<HTMLInputElement>("dailyReviewLimit"),
     vaultName: byId<HTMLInputElement>("vaultName"),
     vaultPath: byId<HTMLInputElement>("vaultPath"),
     saveSettingsButton: byId<HTMLButtonElement>("saveSettingsButton"),
@@ -450,6 +465,9 @@ function collectElements(): Elements {
     openUriButton: byId<HTMLButtonElement>("openUriButton"),
     generateUriButton: byId<HTMLButtonElement>("generateUriButton"),
     persistHint: byId<HTMLParagraphElement>("persistHint"),
+    localLibraryHint: byId<HTMLParagraphElement>("localLibraryHint"),
+    folderSummary: byId<HTMLParagraphElement>("folderSummary"),
+    templateSummary: byId<HTMLParagraphElement>("templateSummary"),
     jsonPanel: document.getElementById("jsonPanel"),
     jsonOutput: document.getElementById("jsonOutput") as HTMLPreElement | null,
   };
@@ -465,15 +483,13 @@ function byId<T extends HTMLElement>(id: string): T {
   return element as T;
 }
 
-function hydrateDefaults(elements: Elements, saved: PersistedSettings) {
-  elements.baseUrl.value = saved.baseUrl || "https://api.openai.com/v1";
-  elements.model.value = saved.model || "gpt-4.1-mini";
-  elements.apiKey.value = saved.apiKey || "";
-  elements.systemPrompt.value = saved.systemPrompt || DEFAULT_SYSTEM_PROMPT;
-  elements.vaultName.value = saved.vaultName || "My Knowledge Vault";
-  elements.deckTag.value = saved.deckTag || "english/phrases";
-  elements.folder.value = saved.folder || "英语";
-  elements.dataStrategyHint.textContent = "当前默认策略：本地优先。当前录入历史保存在应用本地存储中。";
+function hydrateDefaults(elements: Elements) {
+  applySettingsToFields(elements, createDefaultLocalAppSettings(), true);
+  elements.dataStrategyHint.textContent = "当前默认策略：本地优先。卡片将优先保存到应用本地知识库。";
+  elements.localLibraryHint.textContent = "正在连接本地知识库…";
+  elements.folderSummary.textContent = "分类加载中…";
+  elements.templateSummary.textContent = "模板加载中…";
+  elements.saveLocalButton.disabled = true;
 }
 
 function bindEvents(elements: Elements) {
@@ -482,12 +498,19 @@ function bindEvents(elements: Elements) {
   elements.presetButtons.forEach((button) => {
     button.addEventListener("click", () => handleApplyPreset(elements, button.dataset.demoPreset || ""));
   });
-  elements.saveSettingsButton.addEventListener("click", () => handleSaveSettings(elements));
-  elements.resetPromptButton.addEventListener("click", () => handleResetPrompt(elements));
+  elements.saveSettingsButton.addEventListener("click", () => {
+    void handleSaveSettings(elements);
+  });
+  elements.resetPromptButton.addEventListener("click", () => {
+    void handleResetPrompt(elements);
+  });
   elements.runButton.addEventListener("click", () => {
     void handleRunAI(elements);
   });
   elements.fallbackButton.addEventListener("click", () => handleFallbackGenerate(elements));
+  elements.saveLocalButton.addEventListener("click", () => {
+    void handleSaveLocalCard(elements);
+  });
   elements.copyMarkdownButton.addEventListener("click", () => {
     void handleCopyMarkdown(elements);
   });
@@ -505,6 +528,25 @@ function bindEvents(elements: Elements) {
     void handleOpenUri(elements);
   });
   elements.sourceType.addEventListener("change", () => syncSuggestedFolder(elements));
+}
+
+async function hydrateLocalLibrary(elements: Elements) {
+  if (!desktopBridge?.localLibrary) {
+    elements.dataStrategyHint.textContent = "当前环境未连接桌面本地知识库，暂时只支持本次会话预览。";
+    elements.localLibraryHint.textContent = "未检测到本地知识库存储能力。";
+    elements.folderSummary.textContent = "分类信息暂不可用。";
+    elements.templateSummary.textContent = "模板信息暂不可用。";
+    elements.saveLocalButton.disabled = true;
+    return;
+  }
+
+  const snapshot = await desktopBridge.localLibrary.loadSnapshot();
+  localLibrarySnapshot = snapshot;
+  historyCards = snapshot.cards;
+  applySettingsToFields(elements, snapshot.settings, true);
+  renderLocalLibrarySummary(elements, snapshot);
+  renderHistory(elements);
+  elements.saveLocalButton.disabled = false;
 }
 
 function switchPage(elements: Elements, page: AppPage) {
@@ -541,17 +583,29 @@ function applyVaultConfig(elements: Elements, config: VaultConfig) {
   elements.vaultHint.textContent = "当前尚未选择目录。";
 }
 
-function loadSettings(): PersistedSettings {
-  try {
-    const raw = window.localStorage.getItem(SETTINGS_STORAGE_KEY);
-    return raw ? (JSON.parse(raw) as PersistedSettings) : {};
-  } catch {
-    return {};
+function applySettingsToFields(elements: Elements, settings: LocalAppSettings, forceFormFields: boolean) {
+  elements.baseUrl.value = settings.baseUrl || "https://api.openai.com/v1";
+  elements.model.value = settings.model || "gpt-4.1-mini";
+  elements.apiKey.value = settings.apiKey || "";
+  elements.systemPrompt.value = settings.systemPrompt || DEFAULT_SYSTEM_PROMPT;
+  elements.dailyNewLimit.value = String(settings.dailyNewLimit);
+  elements.dailyReviewLimit.value = String(settings.dailyReviewLimit);
+
+  if (forceFormFields || !elements.vaultName.value.trim()) {
+    elements.vaultName.value = settings.vaultName || "My Knowledge Vault";
+  }
+
+  if (forceFormFields || !elements.deckTag.value.trim()) {
+    elements.deckTag.value = settings.deckTag || "english/phrases";
+  }
+
+  if (forceFormFields || !elements.folder.value.trim()) {
+    elements.folder.value = settings.folder || "英语";
   }
 }
 
-function saveSettings(elements: Elements) {
-  const payload: PersistedSettings = {
+function buildSettingsPayload(elements: Elements): Partial<LocalAppSettings> {
+  return {
     baseUrl: elements.baseUrl.value.trim(),
     model: elements.model.value.trim(),
     apiKey: elements.apiKey.value.trim(),
@@ -559,46 +613,37 @@ function saveSettings(elements: Elements) {
     vaultName: elements.vaultName.value.trim(),
     deckTag: elements.deckTag.value.trim(),
     folder: elements.folder.value.trim(),
+    dailyNewLimit: normalizeInputInt(elements.dailyNewLimit.value, 10),
+    dailyReviewLimit: normalizeInputInt(elements.dailyReviewLimit.value, 30),
   };
-
-  window.localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(payload));
 }
 
-function loadHistory(): HistoryEntry[] {
-  try {
-    const raw = window.localStorage.getItem(HISTORY_STORAGE_KEY);
-    return raw ? (JSON.parse(raw) as HistoryEntry[]) : [];
-  } catch {
-    return [];
-  }
-}
-
-function saveHistory() {
-  window.localStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify(historyEntries));
-}
-
-function persistHistoryEntry(entry: HistoryEntry) {
-  historyEntries = [entry]
-    .concat(historyEntries.filter((item) => item.id !== entry.id))
-    .slice(0, HISTORY_LIMIT);
-  saveHistory();
+function renderLocalLibrarySummary(elements: Elements, snapshot: LocalLibrarySnapshot) {
+  elements.dataStrategyHint.textContent =
+    "当前默认策略：本地优先。录入、设置和知识卡片都会先保存到应用本地知识库。";
+  elements.localLibraryHint.textContent =
+    `本地知识库当前共有 ${snapshot.stats.totalCards} 张卡片，今日到期 ${snapshot.stats.dueTodayCount} 张。`;
+  elements.folderSummary.textContent =
+    `当前已准备 ${snapshot.stats.totalFolders} 个分类：${snapshot.folders.map((item) => item.name).join("、")}`;
+  elements.templateSummary.textContent =
+    `当前已准备 ${snapshot.stats.totalTemplates} 个模板：${snapshot.templates.map((item) => item.name).join("、")}`;
 }
 
 function renderHistory(elements: Elements) {
-  if (historyEntries.length === 0) {
+  if (historyCards.length === 0) {
     elements.historyEmpty.hidden = false;
     elements.historyList.innerHTML = "";
     return;
   }
 
   elements.historyEmpty.hidden = true;
-  elements.historyList.innerHTML = historyEntries
+  elements.historyList.innerHTML = historyCards
     .map(
-      (entry) => `
-        <button class="history-item" type="button" data-history-id="${entry.id}">
-          <span class="history-item-title">${escapeHtml(entry.title)}</span>
-          <span class="history-item-meta">${renderHistoryMeta(entry)}</span>
-          <span class="history-item-snippet">${escapeHtml(entry.rawInput.slice(0, 120))}</span>
+      (card) => `
+        <button class="history-item" type="button" data-history-id="${card.id}">
+          <span class="history-item-title">${escapeHtml(card.title)}</span>
+          <span class="history-item-meta">${renderHistoryMeta(card)}</span>
+          <span class="history-item-snippet">${escapeHtml(card.rawInput.slice(0, 120))}</span>
         </button>
       `,
     )
@@ -609,42 +654,48 @@ function renderHistory(elements: Elements) {
   });
 }
 
-function renderHistoryMeta(entry: HistoryEntry) {
-  return `${formatRelativeDate(entry.createdAt)} · ${sourceTypeLabel(entry.sourceType)} · ${entry.folder}`;
+function renderHistoryMeta(card: LocalCardRecord) {
+  const reviewLabel = card.reviewState === "new" ? "待学习" : card.reviewState === "learning" ? "学习中" : "待复习";
+  return `${formatRelativeDate(card.updatedAt)} · ${sourceTypeLabel(card.sourceType)} · ${card.folderName} · ${reviewLabel}`;
 }
 
 function handleHistorySelect(elements: Elements, entryId: string) {
-  const entry = historyEntries.find((item) => item.id === entryId);
+  const entry = historyCards.find((item) => item.id === entryId);
 
   if (!entry) {
     return;
   }
 
+  currentCardId = entry.id;
   elements.rawInput.value = entry.rawInput;
   elements.sourceType.value = entry.sourceType;
   elements.mode.value = entry.mode;
-  elements.folder.value = entry.folder;
+  elements.folder.value = entry.folderName;
   elements.deckTag.value = entry.deckTag;
   elements.context.value = entry.context;
-  elements.vaultName.value = entry.vaultName;
   currentStructuredData = entry.structuredData;
   currentMarkdown = entry.markdown;
-  currentUri = entry.uri;
+  currentUri = entry.obsidianUri;
   isGenerating = false;
   renderOutputs(elements, currentStructuredData, currentMarkdown, currentUri);
-  elements.generationHint.textContent = "已加载一条历史记录，你可以继续编辑、预览或同步到外部存储。";
+  elements.generationHint.textContent = "已加载一条本地卡片记录，你可以继续编辑、预览或同步到外部存储。";
   switchPage(elements, "capture");
 }
 
-function handleSaveSettings(elements: Elements) {
-  saveSettings(elements);
-  elements.persistHint.textContent = "设置已保存到当前桌面应用的本地存储。";
+async function handleSaveSettings(elements: Elements) {
+  if (desktopBridge?.localLibrary) {
+    const snapshot = await desktopBridge.localLibrary.saveSettings(buildSettingsPayload(elements));
+    localLibrarySnapshot = snapshot;
+    renderLocalLibrarySummary(elements, snapshot);
+  }
+
+  elements.persistHint.textContent = "设置已保存到当前桌面应用的本地知识库。";
   setButtonLabel(elements.saveSettingsButton, "已保存");
 }
 
-function handleResetPrompt(elements: Elements) {
+async function handleResetPrompt(elements: Elements) {
   elements.systemPrompt.value = DEFAULT_SYSTEM_PROMPT;
-  saveSettings(elements);
+  await handleSaveSettings(elements);
   elements.persistHint.textContent = "系统 Prompt 已恢复默认并同步保存。";
 }
 
@@ -655,6 +706,7 @@ function handleApplyPreset(elements: Elements, presetId: string) {
     return;
   }
 
+  currentCardId = "";
   elements.rawInput.value = preset.rawInput;
   elements.sourceType.value = preset.sourceType;
   elements.mode.value = preset.mode;
@@ -678,21 +730,13 @@ async function handleChooseVault(elements: Elements) {
 
 function syncSuggestedFolder(elements: Elements) {
   const type = elements.sourceType.value as SourceType;
-  const suggestions: Record<SourceType, string> = {
-    word: "英语",
-    phrase: "英语",
-    sentence: "英语",
-    custom: "求职",
-  };
 
   if (!elements.folder.value.trim()) {
-    elements.folder.value = suggestions[type];
+    elements.folder.value = defaultFolderNameForSourceType(type);
   }
 }
 
 async function handleRunAI(elements: Elements) {
-  saveSettings(elements);
-
   const form = collectForm(elements);
   if (!form.rawInput) {
     renderValidationError(elements, "请先输入知识内容。");
@@ -723,7 +767,6 @@ async function handleRunAI(elements: Elements) {
 }
 
 function handleFallbackGenerate(elements: Elements) {
-  saveSettings(elements);
   const form = collectForm(elements);
 
   if (!form.rawInput) {
@@ -746,6 +789,7 @@ function beginGeneration(elements: Elements, message: string) {
   renderOutputs(elements, null, "", "");
   setButtonDisabled(elements.runButton, true);
   setButtonDisabled(elements.fallbackButton, true);
+  setButtonDisabled(elements.saveLocalButton, true);
 }
 
 function endGeneration(elements: Elements, message: string) {
@@ -753,10 +797,47 @@ function endGeneration(elements: Elements, message: string) {
   elements.generationHint.textContent = message;
   setButtonDisabled(elements.runButton, false);
   setButtonDisabled(elements.fallbackButton, false);
+  setButtonDisabled(elements.saveLocalButton, !desktopBridge?.localLibrary);
 }
 
 function setButtonDisabled(button: HTMLButtonElement, disabled: boolean) {
   button.disabled = disabled;
+}
+
+async function handleSaveLocalCard(elements: Elements) {
+  if (!ensureContentReady(elements)) {
+    return;
+  }
+
+  if (!desktopBridge?.localLibrary || !currentStructuredData || !currentMarkdown) {
+    elements.generationHint.textContent = "当前环境不支持本地知识库存储。";
+    return;
+  }
+
+  setButtonLabel(elements.saveLocalButton, "保存中...");
+
+  try {
+    const result = await desktopBridge.localLibrary.saveCard({
+      cardId: currentCardId || undefined,
+      form: collectForm(elements),
+      structuredData: currentStructuredData,
+      markdown: currentMarkdown,
+      uri: currentUri || buildCurrentUri(elements),
+    });
+
+    currentCardId = result.card.id;
+    localLibrarySnapshot = result.snapshot;
+    historyCards = result.snapshot.cards;
+    renderLocalLibrarySummary(elements, result.snapshot);
+    renderHistory(elements);
+    elements.generationHint.textContent = result.message;
+    elements.persistHint.textContent = "当前卡片已经写入本地知识库，后续可继续扩展为学习与复习数据。";
+    setButtonLabel(elements.saveLocalButton, "已保存");
+  } catch (error) {
+    elements.generationHint.textContent =
+      "保存到本地知识库失败：" + String(error instanceof Error ? error.message : error);
+    setButtonLabel(elements.saveLocalButton, "保存失败");
+  }
 }
 
 async function handleCopyMarkdown(elements: Elements) {
@@ -896,6 +977,7 @@ function renderValidationError(elements: Elements, message: string) {
   elements.generationHint.textContent = message;
   setButtonDisabled(elements.runButton, false);
   setButtonDisabled(elements.fallbackButton, false);
+  setButtonDisabled(elements.saveLocalButton, !desktopBridge?.localLibrary);
 }
 
 function updateWithStructuredData(elements: Elements, structuredData: StructuredData) {
@@ -908,33 +990,8 @@ function updateWithStructuredData(elements: Elements, structuredData: Structured
     keywords: document.keywords,
   };
   currentUri = buildObsidianUri(elements.vaultName.value, document.notePath, document.content);
-  persistHistoryEntry(buildHistoryEntry(elements));
-  renderHistory(elements);
   renderOutputs(elements, currentStructuredData, currentMarkdown, currentUri);
-  endGeneration(elements, "当前卡片已生成完成，你可以继续查看预览或同步到外部存储。");
-}
-
-function buildHistoryEntry(elements: Elements): HistoryEntry {
-  if (!currentStructuredData) {
-    throw new Error("Cannot build history entry without current structured data.");
-  }
-
-  const form = collectForm(elements);
-  return {
-    id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-    createdAt: new Date().toISOString(),
-    title: currentStructuredData.title,
-    sourceType: currentStructuredData.sourceType,
-    mode: form.mode,
-    rawInput: form.rawInput,
-    context: form.context,
-    folder: form.folder,
-    deckTag: form.deckTag,
-    vaultName: form.vaultName,
-    structuredData: currentStructuredData,
-    markdown: currentMarkdown,
-    uri: currentUri,
-  };
+  endGeneration(elements, "当前卡片已生成完成，你可以保存到本地知识库，或继续同步到外部存储。");
 }
 
 function renderOutputs(
@@ -1045,6 +1102,15 @@ function formatRelativeDate(value: string) {
     hour: "2-digit",
     minute: "2-digit",
   });
+}
+
+function normalizeInputInt(value: string, fallback: number) {
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return fallback;
+  }
+
+  return parsed;
 }
 
 function escapeHtml(value: string) {

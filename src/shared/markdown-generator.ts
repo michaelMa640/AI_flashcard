@@ -35,6 +35,8 @@ export function buildMarkdownDocument(data: StructuredData, form: FormState): Ma
     safeMultiline(form.rawInput || title),
     "## 中文速记",
     safeMultiline(data.summaryCn || "待补充中文速记"),
+    "## 提示",
+    safeMultiline(data.hint || "待补充提示"),
     "## AI解释",
     safeMultiline(data.explanation || "待补充解释"),
   ];

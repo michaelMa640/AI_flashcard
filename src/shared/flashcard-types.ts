@@ -11,6 +11,7 @@ export type StructuredData = {
   sourceType: SourceType;
   summaryCn: string;
   explanation: string;
+  hint: string;
   keywords: string[];
   flashcards: Flashcard[];
   notePath: string;

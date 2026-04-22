@@ -4,6 +4,11 @@ import type { DesktopBridgeApi } from "../src/shared/desktop-bridge.js";
 
 const desktopBridge: DesktopBridgeApi = {
   appInfo: desktopAppInfo,
+  localLibrary: {
+    loadSnapshot: () => ipcRenderer.invoke("local-library:load-snapshot"),
+    saveSettings: (payload) => ipcRenderer.invoke("local-library:save-settings", payload),
+    saveCard: (payload) => ipcRenderer.invoke("local-library:save-card", payload),
+  },
   vault: {
     loadConfig: () => ipcRenderer.invoke("vault:load-config"),
     chooseDirectory: () => ipcRenderer.invoke("vault:choose-directory"),

@@ -1,6 +1,6 @@
 export const desktopAppInfo = {
   name: "AI Flashcard",
-  phase: "V2 Step 1",
+  phase: "V2 Step 2",
   targetPlatforms: ["macOS", "Windows"],
   stack: ["Electron", "TypeScript", "Vite"],
 } as const;

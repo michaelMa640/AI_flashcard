@@ -1,8 +1,14 @@
 import type { DesktopAppInfo } from "./app-info.js";
+import type { LocalAppSettings, LocalLibrarySnapshot, SaveCardInput, SaveCardResult } from "./local-library-types.js";
 import type { VaultConfig, WriteMarkdownRequest, WriteMarkdownResult } from "./vault-types.js";
 
 export type DesktopBridgeApi = {
   appInfo: DesktopAppInfo;
+  localLibrary: {
+    loadSnapshot(): Promise<LocalLibrarySnapshot>;
+    saveSettings(payload: Partial<LocalAppSettings>): Promise<LocalLibrarySnapshot>;
+    saveCard(payload: SaveCardInput): Promise<SaveCardResult>;
+  };
   vault: {
     loadConfig(): Promise<VaultConfig>;
     chooseDirectory(): Promise<VaultConfig>;

@@ -46,6 +46,7 @@ export function normalizeStructuredData(raw: RawStructuredData, form: FormState)
     sourceType,
     summaryCn: raw.summaryCn || "待补充中文速记",
     explanation: raw.explanation || "待补充解释",
+    hint: raw.hint || raw.summaryCn || "请补充一个帮助回忆的提示。",
     keywords: Array.isArray(raw.keywords) ? raw.keywords.map(String) : [],
     flashcards:
       flashcards.length > 0
