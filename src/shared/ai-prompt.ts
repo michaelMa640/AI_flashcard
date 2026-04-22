@@ -1,4 +1,6 @@
 import type { FormState } from "./flashcard-types.js";
+import type { PromptStrategy } from "./local-library-types.js";
+import { enabledTemplateFieldsFromForm, templateStrategyLabel } from "./template-runtime.js";
 
 export const DEFAULT_SYSTEM_PROMPT = `你是一个帮助用户把零散知识整理成可复习知识卡片的助手。
 
@@ -26,11 +28,11 @@ export const DEFAULT_SYSTEM_PROMPT = `你是一个帮助用户把零散知识整
 9. 文件名要使用短横线 slug 风格，不要包含非法路径字符。`;
 
 export function buildUserPrompt(form: FormState) {
-  const templateFields = form.templateEnabledFields?.length ? form.templateEnabledFields.join("、") : "未指定";
+  const templateFields = enabledTemplateFieldsFromForm(form).join("、");
   const templateInfo = form.templateName
     ? `
 模板名称：${form.templateName}
-模板策略：${form.templatePromptStrategy || "未指定"}
+模板策略：${templateStrategyLabel((form.templatePromptStrategy as PromptStrategy | undefined) || "general")}
 模板字段：${templateFields}
 模板说明：${form.templateDescription || "无"}`
     : `
@@ -38,6 +40,7 @@ export function buildUserPrompt(form: FormState) {
 模板策略：未指定
 模板字段：未指定
 模板说明：无`;
+  const strategyRequirement = buildStrategyRequirement((form.templatePromptStrategy as PromptStrategy | undefined) || "general");
 
   return `请将下面内容整理为适合知识卡片复习使用的结构化数据。
 
@@ -47,6 +50,7 @@ export function buildUserPrompt(form: FormState) {
 默认目录：${form.folder || "自动判断"}
 默认 deck 标签：${form.deckTag || "flashcards"}
 ${templateInfo}
+模板策略重点：${strategyRequirement}
 
 要求：
 1. 如果内容是单词，请给出词义、常见用法、易混点，并生成 2-4 张卡片。
@@ -58,4 +62,16 @@ ${templateInfo}
 7. hint 应为一句帮助回忆的简短提示。
 8. notePath 尽量与目录规则一致。
 9. 如果已经提供模板字段，请优先保证这些字段的信息质量。`;
+}
+
+function buildStrategyRequirement(strategy: PromptStrategy) {
+  if (strategy === "career") {
+    return "优先突出核心定义、面试或求职应用场景、常见追问和可回忆提示。";
+  }
+
+  if (strategy === "english") {
+    return "优先突出中英对照、词义语气、搭配语境和适合中文用户记忆的表达提示。";
+  }
+
+  return "优先突出概念定义、适用场景、记忆提示和复习问答。";
 }

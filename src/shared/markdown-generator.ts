@@ -1,5 +1,6 @@
 import type { FormState, SourceType, StructuredData } from "./flashcard-types.js";
 import { buildNotePath, folderFromType } from "./flashcard-utils.js";
+import { enabledTemplateFieldsFromForm, templateHasField } from "./template-runtime.js";
 
 export type MarkdownDocument = {
   title: string;
@@ -13,7 +14,8 @@ export type MarkdownDocument = {
 export function buildMarkdownDocument(data: StructuredData, form: FormState): MarkdownDocument {
   const title = normalizeTitle(data.title, form.rawInput);
   const notePath = normalizeNotePath(data.notePath, title, data.sourceType);
-  const keywords = normalizeKeywords(data.keywords);
+  const enabledFields = enabledTemplateFieldsFromForm(form);
+  const keywords = templateHasField(enabledFields, "keywords") ? normalizeKeywords(data.keywords) : [];
   const tags = buildFrontmatterTags(data.sourceType, keywords);
   const deckTagLine = buildDeckTagLine(form.deckTag, data.sourceType);
   const createdAt = new Date().toISOString().slice(0, 10);
@@ -26,6 +28,8 @@ export function buildMarkdownDocument(data: StructuredData, form: FormState): Ma
       created_at: createdAt,
       note_path: notePath,
       deck_tag: deckTagLine.replace(/^#/, ""),
+      template_name: form.templateName || "default",
+      template_strategy: form.templatePromptStrategy || "default",
       keywords,
       tags,
     }),
@@ -33,13 +37,19 @@ export function buildMarkdownDocument(data: StructuredData, form: FormState): Ma
     deckTagLine,
     "## 原文",
     safeMultiline(form.rawInput || title),
-    "## 中文速记",
-    safeMultiline(data.summaryCn || "待补充中文速记"),
-    "## 提示",
-    safeMultiline(data.hint || "待补充提示"),
-    "## AI解释",
-    safeMultiline(data.explanation || "待补充解释"),
   ];
+
+  if (templateHasField(enabledFields, "summary")) {
+    sections.push("## 中文速记", safeMultiline(data.summaryCn || "待补充中文速记"));
+  }
+
+  if (templateHasField(enabledFields, "hint")) {
+    sections.push("## 提示", safeMultiline(data.hint || "待补充提示"));
+  }
+
+  if (templateHasField(enabledFields, "explanation")) {
+    sections.push("## AI解释", safeMultiline(data.explanation || "待补充解释"));
+  }
 
   if (form.context.trim()) {
     sections.push("## 补充上下文", safeMultiline(form.context.trim()));
@@ -49,7 +59,9 @@ export function buildMarkdownDocument(data: StructuredData, form: FormState): Ma
     sections.push("## 生成说明", safeMultiline(data.runtimeNotice.trim()));
   }
 
-  sections.push("## 卡片", flashcardLines || "待补充卡片::待补充答案");
+  if (templateHasField(enabledFields, "flashcards")) {
+    sections.push("## 卡片", flashcardLines || "待补充卡片::待补充答案");
+  }
 
   return {
     title,

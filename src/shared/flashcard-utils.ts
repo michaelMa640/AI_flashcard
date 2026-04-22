@@ -1,4 +1,5 @@
 import type { Flashcard, FormState, SourceType, StructuredData } from "./flashcard-types.js";
+import { applyTemplateToStructuredData } from "./template-runtime.js";
 
 export function buildFallbackStructuredData(form: FormState): StructuredData {
   const title = form.rawInput.split("\n")[0].trim().slice(0, 60) || "untitled";
@@ -6,7 +7,7 @@ export function buildFallbackStructuredData(form: FormState): StructuredData {
   const explanation = fallbackExplanation(form);
   const folder = form.folder || folderFromType(form.sourceType);
 
-  return {
+  return applyTemplateToStructuredData({
     title,
     sourceType: form.sourceType,
     summaryCn,
@@ -15,7 +16,7 @@ export function buildFallbackStructuredData(form: FormState): StructuredData {
     keywords: fallbackKeywords(form),
     flashcards: buildFallbackFlashcards(title, form.rawInput, form.sourceType),
     notePath: buildNotePath(folder, title),
-  };
+  }, form);
 }
 
 export function buildMarkdown(data: StructuredData, form: FormState) {

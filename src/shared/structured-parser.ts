@@ -1,5 +1,6 @@
 import type { FormState, RawStructuredData, StructuredData } from "./flashcard-types.js";
 import { normalizeSourceType } from "./flashcard-types.js";
+import { applyTemplateToStructuredData } from "./template-runtime.js";
 import {
   buildFallbackStructuredData,
   buildNotePath,
@@ -41,7 +42,7 @@ export function normalizeStructuredData(raw: RawStructuredData, form: FormState)
         }))
     : [];
 
-  return {
+  return applyTemplateToStructuredData({
     title,
     sourceType,
     summaryCn: raw.summaryCn || "待补充中文速记",
@@ -54,5 +55,5 @@ export function normalizeStructuredData(raw: RawStructuredData, form: FormState)
         : buildFallbackStructuredData(form).flashcards,
     notePath,
     runtimeNotice: raw.runtimeNotice,
-  };
+  }, form);
 }
