@@ -7,6 +7,7 @@ import {
   defaultFolderNameForSourceType,
 } from "../shared/local-library-defaults.js";
 import type {
+  PromptStrategy,
   LocalAppSettings,
   LocalCardRecord,
   LocalLibrarySnapshot,
@@ -17,7 +18,7 @@ import type {
   TemplateRecord,
 } from "../shared/local-library-types.js";
 import { buildMarkdownDocument } from "../shared/markdown-generator.js";
-import type { FormState, RunMode, SourceType, StructuredData } from "../shared/flashcard-types.js";
+import type { Flashcard, FormState, RunMode, SourceType, StructuredData } from "../shared/flashcard-types.js";
 import { normalizeTemplateFields, resolveTemplateForCard, templateHasField, templateStrategyLabel } from "../shared/template-runtime.js";
 import type { VaultConfig } from "../shared/vault-types.js";
 import { requestStructuredData } from "./services/ai-client.js";
@@ -38,6 +39,27 @@ type DemoPreset = {
   folder: string;
   deckTag: string;
   context: string;
+};
+
+type StudyThemeKey = "english" | "career" | "general";
+
+type StudyTheme = {
+  key: StudyThemeKey;
+  badgeLabel: string;
+  lead: string;
+};
+
+type StudyCardContext = {
+  template: TemplateRecord | null;
+  summaryEnabled: boolean;
+  explanationEnabled: boolean;
+  hintEnabled: boolean;
+  flashcardsEnabled: boolean;
+  flashcards: Flashcard[];
+  activeFlashcard: Flashcard | null;
+  flashcardCount: number;
+  flashcardIndex: number;
+  theme: StudyTheme;
 };
 
 type Elements = {
@@ -73,9 +95,15 @@ type Elements = {
   reviewQueueList: HTMLDivElement;
   reviewQueueEmpty: HTMLParagraphElement;
   studyStageBadge: HTMLSpanElement;
+  studyTemplateBadge: HTMLSpanElement;
   studyCardTitle: HTMLHeadingElement;
   studyCardMeta: HTMLParagraphElement;
+  studyTemplateLead: HTMLParagraphElement;
   studyCardFront: HTMLDivElement;
+  studyFlashcardToolbar: HTMLDivElement;
+  studyFlashcardPosition: HTMLParagraphElement;
+  studyFlashcardPrevButton: HTMLButtonElement;
+  studyFlashcardNextButton: HTMLButtonElement;
   studyAnswerPanel: HTMLDivElement;
   studyCardBack: HTMLParagraphElement;
   studySummary: HTMLParagraphElement;
@@ -143,7 +171,7 @@ const buttonTimers = new WeakMap<HTMLButtonElement, number>();
 const desktopBridge = window.desktopBridge;
 const appInfo = desktopBridge?.appInfo ?? {
   name: "AI Flashcard",
-  phase: "V2 Step 5",
+  phase: "V2 Step 6",
   targetPlatforms: ["macOS", "Windows"],
   stack: ["Electron", "TypeScript", "Vite"],
 };
@@ -190,6 +218,7 @@ let localLibrarySnapshot: LocalLibrarySnapshot | null = null;
 let historyCards: LocalCardRecord[] = [];
 let studyQueueEntries: StudyQueueEntry[] = [];
 let currentStudyIndex = 0;
+let currentStudyFlashcardIndex = 0;
 let studyAnswerVisible = false;
 let studyHintVisible = false;
 let isGenerating = false;
@@ -408,16 +437,28 @@ function renderAppShell() {
 
           <section class="panel">
             <div class="panel-head">
-              <span id="studyStageBadge" class="stage-badge">待开始</span>
+              <div class="study-topline">
+                <span id="studyStageBadge" class="stage-badge">待开始</span>
+                <span id="studyTemplateBadge" class="template-badge template-badge-general">通用模式</span>
+              </div>
               <h2 id="studyCardTitle">学习与复习</h2>
               <p id="studyCardMeta">加载本地知识库后，这里会展示今日第一张卡片。</p>
+              <p id="studyTemplateLead" class="study-template-lead">
+                模板加载后，这里会提示当前卡片更适合怎样回忆与复习。
+              </p>
             </div>
 
-            <div id="studyCardFront" class="study-surface">
+            <div id="studyCardFront" class="study-surface study-theme-general">
               暂无卡片，先在录入页保存几张卡片到本地知识库。
             </div>
 
-            <div id="studyAnswerPanel" class="study-answer-panel" hidden>
+            <div id="studyFlashcardToolbar" class="study-flashcard-toolbar" hidden>
+              <button id="studyFlashcardPrevButton" class="ghost" type="button">上一张子卡</button>
+              <p id="studyFlashcardPosition" class="study-flashcard-position">子卡 1 / 1</p>
+              <button id="studyFlashcardNextButton" class="ghost" type="button">下一张子卡</button>
+            </div>
+
+            <div id="studyAnswerPanel" class="study-answer-panel study-theme-general" hidden>
               <p id="studyCardBack" class="study-answer-line"></p>
               <p id="studySummaryLine" class="study-detail-line"><span id="studySummary"></span></p>
               <p id="studyExplanationLine" class="study-detail-line"><span id="studyExplanation"></span></p>
@@ -657,9 +698,15 @@ function collectElements(): Elements {
     reviewQueueList: byId<HTMLDivElement>("reviewQueueList"),
     reviewQueueEmpty: byId<HTMLParagraphElement>("reviewQueueEmpty"),
     studyStageBadge: byId<HTMLSpanElement>("studyStageBadge"),
+    studyTemplateBadge: byId<HTMLSpanElement>("studyTemplateBadge"),
     studyCardTitle: byId<HTMLHeadingElement>("studyCardTitle"),
     studyCardMeta: byId<HTMLParagraphElement>("studyCardMeta"),
+    studyTemplateLead: byId<HTMLParagraphElement>("studyTemplateLead"),
     studyCardFront: byId<HTMLDivElement>("studyCardFront"),
+    studyFlashcardToolbar: byId<HTMLDivElement>("studyFlashcardToolbar"),
+    studyFlashcardPosition: byId<HTMLParagraphElement>("studyFlashcardPosition"),
+    studyFlashcardPrevButton: byId<HTMLButtonElement>("studyFlashcardPrevButton"),
+    studyFlashcardNextButton: byId<HTMLButtonElement>("studyFlashcardNextButton"),
     studyAnswerPanel: byId<HTMLDivElement>("studyAnswerPanel"),
     studyCardBack: byId<HTMLParagraphElement>("studyCardBack"),
     studySummary: byId<HTMLParagraphElement>("studySummary"),
@@ -787,6 +834,8 @@ function bindEvents(elements: Elements) {
     void handleOpenUri(elements);
   });
   elements.revealAnswerButton.addEventListener("click", () => handleRevealAnswer(elements));
+  elements.studyFlashcardPrevButton.addEventListener("click", () => handleStudyFlashcardStep(elements, -1));
+  elements.studyFlashcardNextButton.addEventListener("click", () => handleStudyFlashcardStep(elements, 1));
   elements.forgotButton.addEventListener("click", () => {
     void handleStudyFeedback(elements, "forgot");
   });
@@ -1000,14 +1049,16 @@ function rebuildStudyQueue(elements: Elements) {
 
   if (studyQueueEntries.length === 0) {
     currentStudyIndex = 0;
-    studyAnswerVisible = false;
-    studyHintVisible = false;
+    resetStudyProgress();
     renderStudyQueueList(elements);
     renderStudyCard(elements);
     return;
   }
 
   currentStudyIndex = Math.min(currentStudyIndex, studyQueueEntries.length - 1);
+  currentStudyFlashcardIndex = 0;
+  studyAnswerVisible = false;
+  studyHintVisible = false;
   renderStudyQueueList(elements);
   renderStudyCard(elements);
 }
@@ -1072,8 +1123,7 @@ function renderStudyQueueList(elements: Elements) {
       }
 
       currentStudyIndex = nextIndex;
-      studyAnswerVisible = false;
-      studyHintVisible = false;
+      resetStudyProgress();
       renderStudyQueueList(elements);
       renderStudyCard(elements);
     });
@@ -1084,10 +1134,14 @@ function renderStudyCard(elements: Elements) {
   const currentEntry = studyQueueEntries[currentStudyIndex];
 
   if (!currentEntry) {
+    applyStudyTheme(elements, "general");
     elements.studyStageBadge.textContent = "今日完成";
+    elements.studyTemplateBadge.textContent = "复习完成";
     elements.studyCardTitle.textContent = "今天暂时没有待学卡片";
     elements.studyCardMeta.textContent = "你可以先去录入页继续保存卡片，或者明天再回来复习。";
+    elements.studyTemplateLead.textContent = "当前队列为空，下一次录入的卡片会继续进入本地学习流。";
     elements.studyCardFront.textContent = "当前队列为空。";
+    elements.studyFlashcardToolbar.hidden = true;
     elements.studyAnswerPanel.hidden = true;
     elements.studyHintCard.hidden = true;
     elements.studySummaryLine.hidden = true;
@@ -1101,32 +1155,42 @@ function renderStudyCard(elements: Elements) {
   }
 
   const { card, queueType } = currentEntry;
-  const template = localLibrarySnapshot ? resolveTemplateForCard(localLibrarySnapshot.templates, card.templateId) : null;
-  const enabledFields = normalizeTemplateFields(template?.enabledFields);
-  const summaryEnabled = templateHasField(enabledFields, "summary");
-  const explanationEnabled = templateHasField(enabledFields, "explanation");
-  const hintEnabled = templateHasField(enabledFields, "hint");
-  const flashcardsEnabled = templateHasField(enabledFields, "flashcards");
+  const context = buildStudyCardContext(currentEntry);
+  if (!context) {
+    return;
+  }
+  const subcardLabel = context.flashcardCount > 0
+    ? ` · 子卡 ${context.flashcardIndex + 1} / ${context.flashcardCount}`
+    : " · 固定模板视图";
+  applyStudyTheme(elements, context.theme.key);
   elements.studyStageBadge.textContent = queueType === "review" ? "待复习" : "待新学";
+  elements.studyTemplateBadge.textContent = context.theme.badgeLabel;
   elements.studyCardTitle.textContent = card.title;
+  elements.studyTemplateLead.textContent = context.theme.lead;
   elements.studyCardMeta.textContent =
-    `${sourceTypeLabel(card.sourceType)} · ${card.folderName} · ${template?.name || "默认模板"} · 第 ${currentStudyIndex + 1} 张 / 共 ${studyQueueEntries.length} 张`;
-  elements.studyCardFront.textContent = readFrontPrompt(card, flashcardsEnabled);
-  elements.studyCardBack.textContent = `答案：${readBackPrompt(card, flashcardsEnabled)}`;
+    `${sourceTypeLabel(card.sourceType)} · ${card.folderName} · ${context.template?.name || "默认模板"} · 第 ${currentStudyIndex + 1} 张 / 共 ${studyQueueEntries.length} 张${subcardLabel}`;
+  elements.studyCardFront.textContent = readFrontPrompt(card, context.flashcardsEnabled, context.flashcardIndex);
+  elements.studyCardBack.textContent = `答案：${readBackPrompt(card, context.flashcardsEnabled, context.flashcardIndex)}`;
   elements.studySummary.textContent = `速记：${card.summary || "待补充"}`;
   elements.studyExplanation.textContent = `解释：${card.explanation || "待补充"}`;
   elements.studyHintText.textContent = card.hint || "当前这张卡片还没有单独提示。";
-  elements.studySummaryLine.hidden = !summaryEnabled;
-  elements.studyExplanationLine.hidden = !explanationEnabled;
+  elements.studySummaryLine.hidden = !context.summaryEnabled;
+  elements.studyExplanationLine.hidden = !context.explanationEnabled;
+  elements.studyFlashcardToolbar.hidden = !context.flashcardsEnabled || context.flashcardCount <= 1;
+  elements.studyFlashcardPosition.textContent = `子卡 ${context.flashcardIndex + 1} / ${Math.max(context.flashcardCount, 1)}`;
+  elements.studyFlashcardPrevButton.disabled = context.flashcardCount <= 1;
+  elements.studyFlashcardNextButton.disabled = context.flashcardCount <= 1;
   elements.studyAnswerPanel.hidden = !studyAnswerVisible;
-  elements.studyHintCard.hidden = !studyHintVisible || !hintEnabled;
+  elements.studyHintCard.hidden = !studyHintVisible || !context.hintEnabled;
   elements.revealAnswerButton.disabled = studyAnswerVisible;
   elements.forgotButton.disabled = !studyAnswerVisible;
-  elements.fuzzyButton.disabled = !studyAnswerVisible || !hintEnabled;
+  elements.fuzzyButton.disabled = !studyAnswerVisible || !context.hintEnabled;
   elements.rememberedButton.disabled = !studyAnswerVisible;
   elements.studyStatusHint.textContent = studyHintVisible
     ? "提示已展开。如果仍然觉得模糊，再点一次“模糊”记录反馈，或改选“不记得 / 记得”。"
-    : "先回忆答案，再点“显示答案”，之后用三档反馈更新这张卡片。";
+    : context.flashcardCount > 1
+      ? `当前模板下共有 ${context.flashcardCount} 张子卡，建议逐张回忆后再显示答案。`
+      : "先回忆答案，再点“显示答案”，之后用三档反馈更新这张卡片。";
 }
 
 function renderHistory(elements: Elements) {
@@ -1188,6 +1252,20 @@ function handleRevealAnswer(elements: Elements) {
   }
 
   studyAnswerVisible = true;
+  studyHintVisible = false;
+  renderStudyCard(elements);
+}
+
+function handleStudyFlashcardStep(elements: Elements, step: -1 | 1) {
+  const context = buildStudyCardContext(studyQueueEntries[currentStudyIndex]);
+
+  if (!context || context.flashcardCount <= 1) {
+    return;
+  }
+
+  const nextIndex = (context.flashcardIndex + step + context.flashcardCount) % context.flashcardCount;
+  currentStudyFlashcardIndex = nextIndex;
+  studyAnswerVisible = false;
   studyHintVisible = false;
   renderStudyCard(elements);
 }
@@ -1340,15 +1418,15 @@ function handleApplyPreset(elements: Elements, presetId: string) {
 }
 
 function setStudyButtonsDisabled(elements: Elements, disabled: boolean) {
-  const currentEntry = studyQueueEntries[currentStudyIndex];
-  const template = currentEntry && localLibrarySnapshot
-    ? resolveTemplateForCard(localLibrarySnapshot.templates, currentEntry.card.templateId)
-    : null;
-  const hintEnabled = templateHasField(normalizeTemplateFields(template?.enabledFields), "hint");
+  const context = buildStudyCardContext(studyQueueEntries[currentStudyIndex]);
+  const hintEnabled = context?.hintEnabled ?? false;
+  const multiFlashcards = (context?.flashcardCount ?? 0) > 1;
   elements.revealAnswerButton.disabled = disabled || studyAnswerVisible;
   elements.forgotButton.disabled = disabled || !studyAnswerVisible;
   elements.fuzzyButton.disabled = disabled || !studyAnswerVisible || !hintEnabled;
   elements.rememberedButton.disabled = disabled || !studyAnswerVisible;
+  elements.studyFlashcardPrevButton.disabled = disabled || !multiFlashcards;
+  elements.studyFlashcardNextButton.disabled = disabled || !multiFlashcards;
 }
 
 async function handleChooseVault(elements: Elements) {
@@ -1798,20 +1876,88 @@ function sourceTypeLabel(sourceType: SourceType) {
   return labels[sourceType];
 }
 
-function readFrontPrompt(card: LocalCardRecord, flashcardsEnabled = true) {
-  if (flashcardsEnabled && card.flashcards[0]?.front) {
-    return card.flashcards[0].front;
+function readFrontPrompt(card: LocalCardRecord, flashcardsEnabled = true, flashcardIndex = 0) {
+  if (flashcardsEnabled && card.flashcards[flashcardIndex]?.front) {
+    return card.flashcards[flashcardIndex].front;
   }
 
   return card.summary || card.title || card.rawInput;
 }
 
-function readBackPrompt(card: LocalCardRecord, flashcardsEnabled = true) {
-  if (flashcardsEnabled && card.flashcards[0]?.back) {
-    return card.flashcards[0].back;
+function readBackPrompt(card: LocalCardRecord, flashcardsEnabled = true, flashcardIndex = 0) {
+  if (flashcardsEnabled && card.flashcards[flashcardIndex]?.back) {
+    return card.flashcards[flashcardIndex].back;
   }
 
   return card.explanation || card.summary || card.rawInput || "待补充答案";
+}
+
+function resetStudyProgress() {
+  currentStudyFlashcardIndex = 0;
+  studyAnswerVisible = false;
+  studyHintVisible = false;
+}
+
+function buildStudyCardContext(entry?: StudyQueueEntry | null): StudyCardContext | null {
+  if (!entry) {
+    return null;
+  }
+
+  const template = localLibrarySnapshot ? resolveTemplateForCard(localLibrarySnapshot.templates, entry.card.templateId) : null;
+  const enabledFields = normalizeTemplateFields(template?.enabledFields);
+  const summaryEnabled = templateHasField(enabledFields, "summary");
+  const explanationEnabled = templateHasField(enabledFields, "explanation");
+  const hintEnabled = templateHasField(enabledFields, "hint");
+  const flashcardsEnabled = templateHasField(enabledFields, "flashcards");
+  const flashcards = flashcardsEnabled
+    ? entry.card.flashcards.filter((item) => Boolean(item.front.trim()) && Boolean(item.back.trim()))
+    : [];
+  const flashcardCount = flashcards.length;
+  const flashcardIndex = flashcardCount === 0 ? 0 : Math.min(currentStudyFlashcardIndex, flashcardCount - 1);
+  currentStudyFlashcardIndex = flashcardIndex;
+
+  return {
+    template,
+    summaryEnabled,
+    explanationEnabled,
+    hintEnabled,
+    flashcardsEnabled,
+    flashcards,
+    activeFlashcard: flashcards[flashcardIndex] || null,
+    flashcardCount,
+    flashcardIndex,
+    theme: resolveStudyTheme(template?.promptStrategy),
+  };
+}
+
+function resolveStudyTheme(strategy?: PromptStrategy): StudyTheme {
+  if (strategy === "career") {
+    return {
+      key: "career",
+      badgeLabel: "求职演练模式",
+      lead: "先代入面试或求职场景回忆，再核对结构化答案、提示和应用方式。",
+    };
+  }
+
+  if (strategy === "english") {
+    return {
+      key: "english",
+      badgeLabel: "英语沉浸模式",
+      lead: "先按英文表达去回忆，再用中文速记和解释校对，适合强化语感、搭配和语境。",
+    };
+  }
+
+  return {
+    key: "general",
+    badgeLabel: "通用复习模式",
+    lead: "先回忆核心概念，再查看答案与提示，适合沉淀定义、场景和通用知识点。",
+  };
+}
+
+function applyStudyTheme(elements: Elements, theme: StudyThemeKey) {
+  elements.studyCardFront.className = `study-surface study-theme-${theme}`;
+  elements.studyAnswerPanel.className = `study-answer-panel study-theme-${theme}`;
+  elements.studyTemplateBadge.className = `template-badge template-badge-${theme}`;
 }
 
 function formatRelativeDate(value: string) {
