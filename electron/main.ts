@@ -7,7 +7,7 @@ import { writeMarkdownToVault } from "./vault-adapter.js";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const isDev = !app.isPackaged;
-const rendererDevUrl = "http://127.0.0.1:5173";
+const rendererDevUrl = "http://localhost:5173";
 let mainWindow: BrowserWindow | null = null;
 
 function createWindow() {
