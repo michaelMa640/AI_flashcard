@@ -11,6 +11,10 @@ import type {
   LocalCardRecord,
   LocalLibrarySnapshot,
   ReviewRating,
+  SaveFolderInput,
+  SaveTemplateInput,
+  TemplateField,
+  TemplateRecord,
 } from "../shared/local-library-types.js";
 import { buildMarkdownDocument } from "../shared/markdown-generator.js";
 import type { FormState, RunMode, SourceType, StructuredData } from "../shared/flashcard-types.js";
@@ -48,6 +52,8 @@ type Elements = {
   sourceType: HTMLSelectElement;
   mode: HTMLSelectElement;
   folder: HTMLInputElement;
+  folderOptions: HTMLDataListElement;
+  folderTemplateHint: HTMLParagraphElement;
   deckTag: HTMLInputElement;
   context: HTMLTextAreaElement;
   runButton: HTMLButtonElement;
@@ -90,6 +96,22 @@ type Elements = {
   vaultPath: HTMLInputElement;
   saveSettingsButton: HTMLButtonElement;
   resetPromptButton: HTMLButtonElement;
+  folderManagerName: HTMLInputElement;
+  folderManagerTemplate: HTMLSelectElement;
+  saveFolderButton: HTMLButtonElement;
+  folderManagerHint: HTMLParagraphElement;
+  settingsFolderList: HTMLDivElement;
+  templateManagerName: HTMLInputElement;
+  templateManagerDescription: HTMLTextAreaElement;
+  templateManagerStrategy: HTMLSelectElement;
+  templateFieldSummary: HTMLInputElement;
+  templateFieldExplanation: HTMLInputElement;
+  templateFieldHint: HTMLInputElement;
+  templateFieldFlashcards: HTMLInputElement;
+  templateFieldKeywords: HTMLInputElement;
+  saveTemplateButton: HTMLButtonElement;
+  templateManagerHint: HTMLParagraphElement;
+  settingsTemplateList: HTMLDivElement;
   chooseVaultButton: HTMLButtonElement;
   writeVaultButton: HTMLButtonElement;
   dataStrategyHint: HTMLParagraphElement;
@@ -118,7 +140,7 @@ const buttonTimers = new WeakMap<HTMLButtonElement, number>();
 const desktopBridge = window.desktopBridge;
 const appInfo = desktopBridge?.appInfo ?? {
   name: "AI Flashcard",
-  phase: "V2 Step 3",
+  phase: "V2 Step 4",
   targetPlatforms: ["macOS", "Windows"],
   stack: ["Electron", "TypeScript", "Vite"],
 };
@@ -168,6 +190,8 @@ let currentStudyIndex = 0;
 let studyAnswerVisible = false;
 let studyHintVisible = false;
 let isGenerating = false;
+let editingFolderId = "";
+let editingTemplateId = "";
 
 bootstrap();
 
@@ -274,7 +298,8 @@ function renderAppShell() {
             <div class="field-row">
               <label class="field">
                 <span>分类文件夹</span>
-                <input id="folder" type="text" placeholder="例如：英语" />
+                <input id="folder" type="text" list="folderOptions" placeholder="例如：英语" />
+                <datalist id="folderOptions"></datalist>
               </label>
 
               <label class="field">
@@ -291,6 +316,10 @@ function renderAppShell() {
                 placeholder="例如：这是我读文章时看到的表达，我想知道它的含义、提示和使用场景。"
               ></textarea>
             </label>
+
+            <p id="folderTemplateHint" class="status-hint">
+              当前分类还没有绑定模板提示，加载本地知识库后会在这里显示对应模板。
+            </p>
 
             <div class="action-row">
               <button id="runButton" class="primary" type="button">AI 解释并结构化</button>
@@ -502,6 +531,73 @@ function renderAppShell() {
           </section>
         </section>
 
+        <section class="page-grid settings-management-grid">
+          <section class="panel">
+            <div class="panel-head">
+              <h2>分类管理</h2>
+              <p>为不同知识方向建立文件夹，并指定默认模板。</p>
+            </div>
+
+            <label class="field">
+              <span>分类名称</span>
+              <input id="folderManagerName" type="text" placeholder="例如：雅思 / 求职 / 产品设计" />
+            </label>
+
+            <label class="field">
+              <span>默认模板</span>
+              <select id="folderManagerTemplate"></select>
+            </label>
+
+            <div class="action-row">
+              <button id="saveFolderButton" class="secondary" type="button">保存分类</button>
+            </div>
+
+            <p id="folderManagerHint" class="persist-hint">当前会在这里提示分类管理结果。</p>
+            <div id="settingsFolderList" class="settings-list"></div>
+          </section>
+
+          <section class="panel">
+            <div class="panel-head">
+              <h2>模板管理</h2>
+              <p>定义不同分类默认使用的模板字段和 Prompt 策略。</p>
+            </div>
+
+            <label class="field">
+              <span>模板名称</span>
+              <input id="templateManagerName" type="text" placeholder="例如：英语精读模板" />
+            </label>
+
+            <label class="field">
+              <span>模板说明</span>
+              <textarea id="templateManagerDescription" rows="4" placeholder="说明这个模板适合什么内容。"></textarea>
+            </label>
+
+            <label class="field">
+              <span>Prompt 策略</span>
+              <select id="templateManagerStrategy">
+                <option value="english">英语</option>
+                <option value="career">求职</option>
+                <option value="general">通用</option>
+              </select>
+            </label>
+
+            <div class="checkbox-grid">
+              <label class="checkbox-row"><input id="templateFieldSummary" type="checkbox" checked />中文速记</label>
+              <label class="checkbox-row"><input id="templateFieldExplanation" type="checkbox" checked />解释</label>
+              <label class="checkbox-row"><input id="templateFieldHint" type="checkbox" checked />提示</label>
+              <label class="checkbox-row"><input id="templateFieldFlashcards" type="checkbox" checked />闪卡</label>
+              <label class="checkbox-row"><input id="templateFieldKeywords" type="checkbox" checked />关键词</label>
+            </div>
+
+            <div class="action-row">
+              <button id="saveTemplateButton" class="secondary" type="button">保存模板</button>
+            </div>
+
+            <p id="templateManagerHint" class="persist-hint">当前会在这里提示模板管理结果。</p>
+            <div id="settingsTemplateList" class="settings-list"></div>
+          </section>
+        </section>
+
         <section class="panel">
           <div class="panel-head">
             <h2>外部回退链接</h2>
@@ -538,6 +634,8 @@ function collectElements(): Elements {
     sourceType: byId<HTMLSelectElement>("sourceType"),
     mode: byId<HTMLSelectElement>("mode"),
     folder: byId<HTMLInputElement>("folder"),
+    folderOptions: byId<HTMLDataListElement>("folderOptions"),
+    folderTemplateHint: byId<HTMLParagraphElement>("folderTemplateHint"),
     deckTag: byId<HTMLInputElement>("deckTag"),
     context: byId<HTMLTextAreaElement>("context"),
     runButton: byId<HTMLButtonElement>("runButton"),
@@ -580,6 +678,22 @@ function collectElements(): Elements {
     vaultPath: byId<HTMLInputElement>("vaultPath"),
     saveSettingsButton: byId<HTMLButtonElement>("saveSettingsButton"),
     resetPromptButton: byId<HTMLButtonElement>("resetPromptButton"),
+    folderManagerName: byId<HTMLInputElement>("folderManagerName"),
+    folderManagerTemplate: byId<HTMLSelectElement>("folderManagerTemplate"),
+    saveFolderButton: byId<HTMLButtonElement>("saveFolderButton"),
+    folderManagerHint: byId<HTMLParagraphElement>("folderManagerHint"),
+    settingsFolderList: byId<HTMLDivElement>("settingsFolderList"),
+    templateManagerName: byId<HTMLInputElement>("templateManagerName"),
+    templateManagerDescription: byId<HTMLTextAreaElement>("templateManagerDescription"),
+    templateManagerStrategy: byId<HTMLSelectElement>("templateManagerStrategy"),
+    templateFieldSummary: byId<HTMLInputElement>("templateFieldSummary"),
+    templateFieldExplanation: byId<HTMLInputElement>("templateFieldExplanation"),
+    templateFieldHint: byId<HTMLInputElement>("templateFieldHint"),
+    templateFieldFlashcards: byId<HTMLInputElement>("templateFieldFlashcards"),
+    templateFieldKeywords: byId<HTMLInputElement>("templateFieldKeywords"),
+    saveTemplateButton: byId<HTMLButtonElement>("saveTemplateButton"),
+    templateManagerHint: byId<HTMLParagraphElement>("templateManagerHint"),
+    settingsTemplateList: byId<HTMLDivElement>("settingsTemplateList"),
     chooseVaultButton: byId<HTMLButtonElement>("chooseVaultButton"),
     writeVaultButton: byId<HTMLButtonElement>("writeVaultButton"),
     dataStrategyHint: byId<HTMLParagraphElement>("dataStrategyHint"),
@@ -614,10 +728,15 @@ function hydrateDefaults(elements: Elements) {
   elements.localLibraryHint.textContent = "正在连接本地知识库…";
   elements.folderSummary.textContent = "分类加载中…";
   elements.templateSummary.textContent = "模板加载中…";
+  elements.folderTemplateHint.textContent = "当前分类还没有绑定模板提示，加载本地知识库后会在这里显示对应模板。";
   elements.saveLocalButton.disabled = true;
   elements.forgotButton.disabled = true;
   elements.fuzzyButton.disabled = true;
   elements.rememberedButton.disabled = true;
+  elements.folderManagerHint.textContent = "当前会在这里提示分类管理结果。";
+  elements.templateManagerHint.textContent = "当前会在这里提示模板管理结果。";
+  resetFolderEditor(elements);
+  resetTemplateEditor(elements);
 }
 
 function bindEvents(elements: Elements) {
@@ -632,6 +751,12 @@ function bindEvents(elements: Elements) {
   });
   elements.resetPromptButton.addEventListener("click", () => {
     void handleResetPrompt(elements);
+  });
+  elements.saveFolderButton.addEventListener("click", () => {
+    void handleSaveFolder(elements);
+  });
+  elements.saveTemplateButton.addEventListener("click", () => {
+    void handleSaveTemplate(elements);
   });
   elements.runButton.addEventListener("click", () => {
     void handleRunAI(elements);
@@ -667,6 +792,8 @@ function bindEvents(elements: Elements) {
     void handleStudyFeedback(elements, "remembered");
   });
   elements.sourceType.addEventListener("change", () => syncSuggestedFolder(elements));
+  elements.folder.addEventListener("change", () => syncFolderSelection(elements));
+  elements.folder.addEventListener("input", () => syncFolderSelection(elements));
 }
 
 async function hydrateLocalLibrary(elements: Elements) {
@@ -684,8 +811,10 @@ async function hydrateLocalLibrary(elements: Elements) {
   historyCards = snapshot.cards;
   applySettingsToFields(elements, snapshot.settings, true);
   renderLocalLibrarySummary(elements, snapshot);
+  renderFolderAndTemplateManagers(elements, snapshot);
   renderHistory(elements);
   rebuildStudyQueue(elements);
+  syncFolderSelection(elements);
   elements.saveLocalButton.disabled = false;
 }
 
@@ -770,6 +899,95 @@ function renderLocalLibrarySummary(elements: Elements, snapshot: LocalLibrarySna
     `当前已准备 ${snapshot.stats.totalFolders} 个分类：${snapshot.folders.map((item) => item.name).join("、")}`;
   elements.templateSummary.textContent =
     `当前已准备 ${snapshot.stats.totalTemplates} 个模板：${snapshot.templates.map((item) => item.name).join("、")}`;
+}
+
+function renderFolderAndTemplateManagers(elements: Elements, snapshot: LocalLibrarySnapshot) {
+  renderFolderOptions(elements, snapshot);
+  renderFolderManager(elements, snapshot);
+  renderTemplateManager(elements, snapshot);
+}
+
+function renderFolderOptions(elements: Elements, snapshot: LocalLibrarySnapshot) {
+  elements.folderOptions.innerHTML = snapshot.folders
+    .map((folder) => `<option value="${escapeHtml(folder.name)}"></option>`)
+    .join("");
+}
+
+function renderFolderManager(elements: Elements, snapshot: LocalLibrarySnapshot) {
+  elements.folderManagerTemplate.innerHTML = snapshot.templates
+    .map((template) => `<option value="${template.id}">${escapeHtml(template.name)}</option>`)
+    .join("");
+  if (!editingFolderId) {
+    resetFolderEditor(elements);
+  }
+
+  elements.settingsFolderList.innerHTML = snapshot.folders
+    .map((folder) => {
+      const template = snapshot.templates.find((item) => item.id === folder.templateId);
+      return `
+        <button class="history-item" type="button" data-folder-edit-id="${folder.id}">
+          <span class="history-item-title">${escapeHtml(folder.name)}</span>
+          <span class="history-item-meta">默认模板：${escapeHtml(template?.name || "未指定模板")}</span>
+          <span class="history-item-snippet">${escapeHtml(template?.description || "当前分类还没有模板说明。")}</span>
+        </button>
+      `;
+    })
+    .join("");
+
+  elements.settingsFolderList.querySelectorAll<HTMLButtonElement>("[data-folder-edit-id]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const folderId = button.dataset.folderEditId || "";
+      const folder = snapshot.folders.find((item) => item.id === folderId);
+      if (!folder) {
+        return;
+      }
+
+      editingFolderId = folder.id;
+      elements.folderManagerName.value = folder.name;
+      elements.folderManagerTemplate.value = folder.templateId;
+      elements.folderManagerHint.textContent = `已载入分类“${folder.name}”，修改后再次点击“保存分类”即可更新。`;
+      setButtonLabel(elements.saveFolderButton, "编辑中");
+    });
+  });
+}
+
+function renderTemplateManager(elements: Elements, snapshot: LocalLibrarySnapshot) {
+  if (!editingTemplateId) {
+    resetTemplateEditor(elements);
+  }
+  elements.settingsTemplateList.innerHTML = snapshot.templates
+    .map(
+      (template) => `
+        <button class="history-item" type="button" data-template-edit-id="${template.id}">
+          <span class="history-item-title">${escapeHtml(template.name)}</span>
+          <span class="history-item-meta">${templateStrategyLabel(template.promptStrategy)} · 字段：${template.enabledFields.join(" / ")}</span>
+          <span class="history-item-snippet">${escapeHtml(template.description || "当前模板还没有补充说明。")}</span>
+        </button>
+      `,
+    )
+    .join("");
+
+  elements.settingsTemplateList.querySelectorAll<HTMLButtonElement>("[data-template-edit-id]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const templateId = button.dataset.templateEditId || "";
+      const template = snapshot.templates.find((item) => item.id === templateId);
+      if (!template) {
+        return;
+      }
+
+      loadTemplateIntoEditor(elements, template);
+      elements.templateManagerHint.textContent = `已载入模板“${template.name}”，修改后再次点击“保存模板”即可更新。`;
+      setButtonLabel(elements.saveTemplateButton, "编辑中");
+    });
+  });
+}
+
+function loadTemplateIntoEditor(elements: Elements, template: TemplateRecord) {
+  editingTemplateId = template.id;
+  elements.templateManagerName.value = template.name;
+  elements.templateManagerDescription.value = template.description;
+  elements.templateManagerStrategy.value = template.promptStrategy;
+  setTemplateFieldSelection(elements, template.enabledFields);
 }
 
 function rebuildStudyQueue(elements: Elements) {
@@ -1007,7 +1225,9 @@ async function handleSaveSettings(elements: Elements) {
     const snapshot = await desktopBridge.localLibrary.saveSettings(buildSettingsPayload(elements));
     localLibrarySnapshot = snapshot;
     renderLocalLibrarySummary(elements, snapshot);
+    renderFolderAndTemplateManagers(elements, snapshot);
     rebuildStudyQueue(elements);
+    syncFolderSelection(elements);
   }
 
   elements.persistHint.textContent = "设置已保存到当前桌面应用的本地知识库。";
@@ -1018,6 +1238,72 @@ async function handleResetPrompt(elements: Elements) {
   elements.systemPrompt.value = DEFAULT_SYSTEM_PROMPT;
   await handleSaveSettings(elements);
   elements.persistHint.textContent = "系统 Prompt 已恢复默认并同步保存。";
+}
+
+async function handleSaveFolder(elements: Elements) {
+  if (!desktopBridge?.localLibrary) {
+    elements.folderManagerHint.textContent = "当前环境不支持本地分类管理。";
+    return;
+  }
+
+  const wasEditing = Boolean(editingFolderId);
+  const payload: SaveFolderInput = {
+    id: editingFolderId || undefined,
+    name: elements.folderManagerName.value.trim(),
+    templateId: elements.folderManagerTemplate.value,
+  };
+
+  try {
+    const result = await desktopBridge.localLibrary.saveFolder(payload);
+    localLibrarySnapshot = result.snapshot;
+    historyCards = result.snapshot.cards;
+    renderLocalLibrarySummary(elements, result.snapshot);
+    renderFolderAndTemplateManagers(elements, result.snapshot);
+    renderHistory(elements);
+    rebuildStudyQueue(elements);
+    resetFolderEditor(elements);
+    if (!elements.folder.value.trim() || wasEditing || elements.folder.value === payload.name) {
+      elements.folder.value = result.folder.name;
+    }
+    syncFolderSelection(elements);
+    elements.folderManagerHint.textContent = result.message;
+    setButtonLabel(elements.saveFolderButton, "已保存");
+  } catch (error) {
+    elements.folderManagerHint.textContent =
+      "保存分类失败：" + String(error instanceof Error ? error.message : error);
+    setButtonLabel(elements.saveFolderButton, "失败");
+  }
+}
+
+async function handleSaveTemplate(elements: Elements) {
+  if (!desktopBridge?.localLibrary) {
+    elements.templateManagerHint.textContent = "当前环境不支持本地模板管理。";
+    return;
+  }
+
+  const payload: SaveTemplateInput = {
+    id: editingTemplateId || undefined,
+    name: elements.templateManagerName.value.trim(),
+    description: elements.templateManagerDescription.value.trim(),
+    promptStrategy: elements.templateManagerStrategy.value as TemplateRecord["promptStrategy"],
+    enabledFields: collectTemplateFields(elements),
+  };
+
+  try {
+    const result = await desktopBridge.localLibrary.saveTemplate(payload);
+    localLibrarySnapshot = result.snapshot;
+    renderLocalLibrarySummary(elements, result.snapshot);
+    renderFolderAndTemplateManagers(elements, result.snapshot);
+    rebuildStudyQueue(elements);
+    resetTemplateEditor(elements);
+    syncFolderSelection(elements);
+    elements.templateManagerHint.textContent = result.message;
+    setButtonLabel(elements.saveTemplateButton, "已保存");
+  } catch (error) {
+    elements.templateManagerHint.textContent =
+      "保存模板失败：" + String(error instanceof Error ? error.message : error);
+    setButtonLabel(elements.saveTemplateButton, "失败");
+  }
 }
 
 function handleApplyPreset(elements: Elements, presetId: string) {
@@ -1035,6 +1321,7 @@ function handleApplyPreset(elements: Elements, presetId: string) {
   elements.deckTag.value = preset.deckTag;
   elements.context.value = preset.context;
   elements.generationHint.textContent = `已载入“${preset.label}”调试样例，可继续生成预览。`;
+  syncFolderSelection(elements);
 }
 
 function setStudyButtonsDisabled(elements: Elements, disabled: boolean) {
@@ -1062,6 +1349,83 @@ function syncSuggestedFolder(elements: Elements) {
   if (!elements.folder.value.trim()) {
     elements.folder.value = defaultFolderNameForSourceType(type);
   }
+
+  syncFolderSelection(elements);
+}
+
+function syncFolderSelection(elements: Elements) {
+  const selection = resolveCurrentFolderSelection(elements);
+  if (!selection.folder || !selection.template) {
+    elements.folderTemplateHint.textContent = "当前分类还没有绑定已知模板，你可以在设置页里创建分类并指定模板。";
+    return;
+  }
+
+  elements.folderTemplateHint.textContent =
+    `当前分类“${selection.folder.name}”绑定模板“${selection.template.name}”，策略为 ${templateStrategyLabel(selection.template.promptStrategy)}。`;
+}
+
+function resolveCurrentFolderSelection(elements: Elements) {
+  const folder = localLibrarySnapshot?.folders.find((item) => item.name === elements.folder.value.trim()) || null;
+  const template = folder ? localLibrarySnapshot?.templates.find((item) => item.id === folder.templateId) || null : null;
+  return { folder, template };
+}
+
+function collectTemplateFields(elements: Elements): TemplateField[] {
+  const fields: TemplateField[] = [];
+  if (elements.templateFieldSummary.checked) {
+    fields.push("summary");
+  }
+  if (elements.templateFieldExplanation.checked) {
+    fields.push("explanation");
+  }
+  if (elements.templateFieldHint.checked) {
+    fields.push("hint");
+  }
+  if (elements.templateFieldFlashcards.checked) {
+    fields.push("flashcards");
+  }
+  if (elements.templateFieldKeywords.checked) {
+    fields.push("keywords");
+  }
+
+  return fields.length > 0 ? fields : ["summary", "flashcards"];
+}
+
+function setTemplateFieldSelection(elements: Elements, fields: TemplateField[]) {
+  const values = new Set(fields);
+  elements.templateFieldSummary.checked = values.has("summary");
+  elements.templateFieldExplanation.checked = values.has("explanation");
+  elements.templateFieldHint.checked = values.has("hint");
+  elements.templateFieldFlashcards.checked = values.has("flashcards");
+  elements.templateFieldKeywords.checked = values.has("keywords");
+}
+
+function resetFolderEditor(elements: Elements) {
+  editingFolderId = "";
+  elements.folderManagerName.value = "";
+  if (elements.folderManagerTemplate.options.length > 0) {
+    elements.folderManagerTemplate.selectedIndex = 0;
+  }
+}
+
+function resetTemplateEditor(elements: Elements) {
+  editingTemplateId = "";
+  elements.templateManagerName.value = "";
+  elements.templateManagerDescription.value = "";
+  elements.templateManagerStrategy.value = "english";
+  setTemplateFieldSelection(elements, ["summary", "explanation", "hint", "flashcards", "keywords"]);
+}
+
+function templateStrategyLabel(strategy: TemplateRecord["promptStrategy"]) {
+  if (strategy === "career") {
+    return "求职";
+  }
+
+  if (strategy === "general") {
+    return "通用";
+  }
+
+  return "英语";
 }
 
 async function handleRunAI(elements: Elements) {
@@ -1282,6 +1646,7 @@ async function handleOpenUri(elements: Elements) {
 }
 
 function collectForm(elements: Elements): FormState {
+  const selection = resolveCurrentFolderSelection(elements);
   return {
     rawInput: elements.rawInput.value.trim(),
     sourceType: elements.sourceType.value as SourceType,
@@ -1289,6 +1654,12 @@ function collectForm(elements: Elements): FormState {
     vaultName: elements.vaultName.value.trim(),
     deckTag: elements.deckTag.value.trim(),
     folder: elements.folder.value.trim(),
+    folderId: selection.folder?.id,
+    templateId: selection.template?.id,
+    templateName: selection.template?.name,
+    templatePromptStrategy: selection.template?.promptStrategy,
+    templateEnabledFields: selection.template?.enabledFields,
+    templateDescription: selection.template?.description,
     context: elements.context.value.trim(),
     baseUrl: elements.baseUrl.value.trim(),
     model: elements.model.value.trim(),

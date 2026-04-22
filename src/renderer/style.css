@@ -188,6 +188,10 @@ body {
   color: var(--accent-deep);
 }
 
+.field datalist {
+  display: none;
+}
+
 .field-row {
   display: grid;
   gap: 14px;
@@ -367,6 +371,39 @@ button:disabled {
   margin-bottom: 18px;
 }
 
+.settings-management-grid {
+  margin-top: 20px;
+}
+
+.settings-list {
+  display: grid;
+  gap: 12px;
+  margin-top: 14px;
+}
+
+.checkbox-grid {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin-top: 8px;
+}
+
+.checkbox-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  border-radius: 16px;
+  border: 1px solid rgba(120, 73, 43, 0.14);
+  background: rgba(255, 251, 247, 0.82);
+  color: var(--ink);
+}
+
+.checkbox-row input {
+  width: auto;
+  margin: 0;
+}
+
 .metric-card {
   padding: 16px;
   border-radius: 20px;
@@ -539,6 +576,10 @@ code {
   }
 
   .review-metrics {
+    grid-template-columns: 1fr;
+  }
+
+  .checkbox-grid {
     grid-template-columns: 1fr;
   }
 

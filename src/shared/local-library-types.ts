@@ -92,6 +92,32 @@ export type SaveCardResult = {
   message: string;
 };
 
+export type SaveFolderInput = {
+  id?: string;
+  name: string;
+  templateId: string;
+};
+
+export type SaveFolderResult = {
+  folder: FolderRecord;
+  snapshot: LocalLibrarySnapshot;
+  message: string;
+};
+
+export type SaveTemplateInput = {
+  id?: string;
+  name: string;
+  description: string;
+  promptStrategy: PromptStrategy;
+  enabledFields: TemplateField[];
+};
+
+export type SaveTemplateResult = {
+  template: TemplateRecord;
+  snapshot: LocalLibrarySnapshot;
+  message: string;
+};
+
 export type ReviewCardInput = {
   cardId: string;
   rating: ReviewRating;

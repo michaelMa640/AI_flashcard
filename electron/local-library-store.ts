@@ -20,6 +20,10 @@ import type {
   ReviewRating,
   SaveCardInput,
   SaveCardResult,
+  SaveFolderInput,
+  SaveFolderResult,
+  SaveTemplateInput,
+  SaveTemplateResult,
   TemplateField,
   TemplateRecord,
 } from "../src/shared/local-library-types.js";
@@ -93,6 +97,99 @@ export async function saveLocalCard(input: SaveCardInput): Promise<SaveCardResul
     card,
     snapshot: buildLocalLibrarySnapshot(data),
     message: existing ? "本地知识卡片已更新。" : "已保存到本地知识库。",
+  };
+}
+
+export async function saveLocalFolder(input: SaveFolderInput): Promise<SaveFolderResult> {
+  const data = await loadLocalLibraryData();
+  const name = input.name.trim();
+  const template = data.templates.find((item) => item.id === input.templateId);
+
+  if (!name) {
+    throw new Error("分类名称不能为空。");
+  }
+
+  if (!template) {
+    throw new Error("未找到对应的模板。");
+  }
+
+  const duplicate = data.folders.find((item) => item.name === name && item.id !== input.id);
+  if (duplicate) {
+    throw new Error("已存在同名分类，请换一个名称。");
+  }
+
+  const now = new Date().toISOString();
+  const existing = input.id ? data.folders.find((item) => item.id === input.id) : undefined;
+  const folder: FolderRecord = {
+    id: existing?.id || randomUUID(),
+    name,
+    templateId: template.id,
+    createdAt: existing?.createdAt || now,
+    updatedAt: now,
+  };
+
+  data.folders = data.folders
+    .filter((item) => item.id !== folder.id)
+    .concat(folder)
+    .sort((left, right) => left.name.localeCompare(right.name, "zh-CN"));
+  data.cards = data.cards.map((card) =>
+    card.folderId === folder.id
+      ? {
+          ...card,
+          folderName: folder.name,
+          templateId: folder.templateId,
+          updatedAt: now,
+        }
+      : card,
+  );
+  data.settings = normalizeSettings({
+    ...data.settings,
+    folder: folder.name,
+  });
+  await persistLocalLibraryData(data);
+
+  return {
+    folder,
+    snapshot: buildLocalLibrarySnapshot(data),
+    message: existing ? "分类已更新。" : "新分类已创建。",
+  };
+}
+
+export async function saveLocalTemplate(input: SaveTemplateInput): Promise<SaveTemplateResult> {
+  const data = await loadLocalLibraryData();
+  const name = input.name.trim();
+
+  if (!name) {
+    throw new Error("模板名称不能为空。");
+  }
+
+  const duplicate = data.templates.find((item) => item.name === name && item.id !== input.id);
+  if (duplicate) {
+    throw new Error("已存在同名模板，请换一个名称。");
+  }
+
+  const now = new Date().toISOString();
+  const existing = input.id ? data.templates.find((item) => item.id === input.id) : undefined;
+  const template: TemplateRecord = {
+    id: existing?.id || randomUUID(),
+    name,
+    description: input.description.trim(),
+    promptStrategy: input.promptStrategy,
+    enabledFields: normalizeTemplateFields(input.enabledFields),
+    createdAt: existing?.createdAt || now,
+    updatedAt: now,
+  };
+
+  data.templates = data.templates
+    .filter((item) => item.id !== template.id)
+    .concat(template)
+    .sort((left, right) => left.name.localeCompare(right.name, "zh-CN"));
+  await persistLocalLibraryData(data);
+
+  return {
+    template,
+    snapshot: buildLocalLibrarySnapshot(data),
+    message: existing ? "模板已更新。" : "新模板已创建。",
   };
 }
 

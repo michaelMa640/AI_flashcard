@@ -1,7 +1,14 @@
 import { app, BrowserWindow, dialog, ipcMain, shell } from "electron";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { loadLocalLibrarySnapshot, reviewLocalCard, saveLocalAppSettings, saveLocalCard } from "./local-library-store.js";
+import {
+  loadLocalLibrarySnapshot,
+  reviewLocalCard,
+  saveLocalAppSettings,
+  saveLocalCard,
+  saveLocalFolder,
+  saveLocalTemplate,
+} from "./local-library-store.js";
 import { loadVaultConfig, saveVaultConfig } from "./vault-store.js";
 import { writeMarkdownToVault } from "./vault-adapter.js";
 
@@ -46,6 +53,8 @@ function registerIpcHandlers() {
   ipcMain.handle("local-library:load-snapshot", async () => loadLocalLibrarySnapshot());
   ipcMain.handle("local-library:save-settings", async (_event, payload) => saveLocalAppSettings(payload));
   ipcMain.handle("local-library:save-card", async (_event, payload) => saveLocalCard(payload));
+  ipcMain.handle("local-library:save-folder", async (_event, payload) => saveLocalFolder(payload));
+  ipcMain.handle("local-library:save-template", async (_event, payload) => saveLocalTemplate(payload));
   ipcMain.handle("local-library:review-card", async (_event, payload) => reviewLocalCard(payload));
 
   ipcMain.handle("vault:load-config", async () => loadVaultConfig());

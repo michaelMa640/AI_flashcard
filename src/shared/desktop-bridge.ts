@@ -4,8 +4,12 @@ import type {
   LocalLibrarySnapshot,
   ReviewCardInput,
   ReviewCardResult,
+  SaveFolderInput,
+  SaveFolderResult,
   SaveCardInput,
   SaveCardResult,
+  SaveTemplateInput,
+  SaveTemplateResult,
 } from "./local-library-types.js";
 import type { VaultConfig, WriteMarkdownRequest, WriteMarkdownResult } from "./vault-types.js";
 
@@ -15,6 +19,8 @@ export type DesktopBridgeApi = {
     loadSnapshot(): Promise<LocalLibrarySnapshot>;
     saveSettings(payload: Partial<LocalAppSettings>): Promise<LocalLibrarySnapshot>;
     saveCard(payload: SaveCardInput): Promise<SaveCardResult>;
+    saveFolder(payload: SaveFolderInput): Promise<SaveFolderResult>;
+    saveTemplate(payload: SaveTemplateInput): Promise<SaveTemplateResult>;
     reviewCard(payload: ReviewCardInput): Promise<ReviewCardResult>;
   };
   vault: {

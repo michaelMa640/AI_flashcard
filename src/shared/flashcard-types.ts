@@ -35,6 +35,12 @@ export type FormState = {
   vaultName: string;
   deckTag: string;
   folder: string;
+  folderId?: string;
+  templateId?: string;
+  templateName?: string;
+  templatePromptStrategy?: string;
+  templateEnabledFields?: string[];
+  templateDescription?: string;
   context: string;
   baseUrl: string;
   model: string;
