@@ -8,6 +8,7 @@ import type {
   LocalLibraryStats,
   TemplateRecord,
 } from "./local-library-types.js";
+import { buildDailyStudyPlan } from "./review-scheduler.js";
 
 export const LOCAL_LIBRARY_VERSION = 1;
 
@@ -57,12 +58,18 @@ export function buildLocalLibrarySnapshot(data: LocalLibraryData): LocalLibraryS
 }
 
 export function buildLocalLibraryStats(data: LocalLibraryData): LocalLibraryStats {
-  const today = new Date().toISOString().slice(0, 10);
+  const plan = buildDailyStudyPlan(data.cards, data.settings);
   return {
     totalCards: data.cards.length,
     totalFolders: data.folders.length,
     totalTemplates: data.templates.length,
-    dueTodayCount: data.cards.filter((card) => card.reviewDueAt.slice(0, 10) <= today).length,
+    dueTodayCount: plan.dueReviewCards.length,
+    newCardCount: plan.newCards.length,
+    scheduledReviewCount: plan.scheduledReviewCards.length,
+    scheduledNewCount: plan.scheduledNewCards.length,
+    reviewBacklogCount: plan.reviewBacklogCount,
+    newBacklogCount: plan.newBacklogCount,
+    scheduledTodayCount: plan.scheduledTodayCount,
   };
 }
 

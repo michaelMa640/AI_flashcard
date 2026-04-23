@@ -72,6 +72,12 @@ export type LocalLibraryStats = {
   totalFolders: number;
   totalTemplates: number;
   dueTodayCount: number;
+  newCardCount: number;
+  scheduledReviewCount: number;
+  scheduledNewCount: number;
+  reviewBacklogCount: number;
+  newBacklogCount: number;
+  scheduledTodayCount: number;
 };
 
 export type LocalLibrarySnapshot = LocalLibraryData & {

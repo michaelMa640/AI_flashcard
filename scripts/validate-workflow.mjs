@@ -2,7 +2,9 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildFallbackStructuredData, buildObsidianUri } from "../dist-electron/src/shared/flashcard-utils.js";
+import { createDefaultLocalAppSettings } from "../dist-electron/src/shared/local-library-defaults.js";
 import { buildMarkdownDocument } from "../dist-electron/src/shared/markdown-generator.js";
+import { buildDailyStudyPlan, buildReviewScheduleUpdate } from "../dist-electron/src/shared/review-scheduler.js";
 import { normalizeStructuredData, parseModelJson } from "../dist-electron/src/shared/structured-parser.js";
 import { writeMarkdownToVault } from "../dist-electron/electron/vault-adapter.js";
 
@@ -138,6 +140,72 @@ async function main() {
         uriLength: uri.length,
       });
     }
+
+    const schedulerSettings = createDefaultLocalAppSettings();
+    const reviewSeed = {
+      id: "review-seed",
+      title: "seed review",
+      folderId: "folder-english",
+      folderName: "英语",
+      templateId: "template-english-core",
+      sourceType: "word",
+      mode: "ai",
+      rawInput: "serendipity",
+      context: "",
+      deckTag: "english/words",
+      summary: "summary",
+      explanation: "explanation",
+      hint: "hint",
+      keywords: [],
+      flashcards: [{ front: "front", back: "back" }],
+      notePath: "英语/serendipity.md",
+      markdown: "# demo",
+      obsidianUri: "obsidian://demo",
+      structuredData: {
+        title: "seed review",
+        sourceType: "word",
+        summaryCn: "summary",
+        explanation: "explanation",
+        hint: "hint",
+        keywords: [],
+        flashcards: [{ front: "front", back: "back" }],
+        notePath: "英语/serendipity.md",
+      },
+      createdAt: "2026-04-20T10:00:00.000Z",
+      updatedAt: "2026-04-20T10:00:00.000Z",
+      reviewState: "review",
+      reviewDueAt: "2026-04-21T10:00:00.000Z",
+      reviewLastAt: "2026-04-20T10:00:00.000Z",
+      reviewCount: 2,
+      memoryScore: 2,
+    };
+    const newSeed = {
+      ...reviewSeed,
+      id: "new-seed",
+      title: "seed new",
+      reviewState: "new",
+      reviewDueAt: "2026-04-23T09:00:00.000Z",
+      reviewLastAt: null,
+      reviewCount: 0,
+      memoryScore: 0,
+    };
+
+    const plan = buildDailyStudyPlan(
+      [reviewSeed, newSeed],
+      {
+        ...schedulerSettings,
+        dailyReviewLimit: 1,
+        dailyNewLimit: 1,
+      },
+      new Date("2026-04-23T10:00:00.000Z"),
+    );
+    const remembered = buildReviewScheduleUpdate(newSeed, "remembered", new Date("2026-04-23T10:00:00.000Z"));
+
+    assert(plan.scheduledReviewCards.length === 1, "scheduler: expected one scheduled review card");
+    assert(plan.scheduledNewCards.length === 1, "scheduler: expected one scheduled new card");
+    assert(remembered.memoryScore === 1, "scheduler: remembered new card should advance to stage 1");
+    assert(remembered.reviewState === "learning", "scheduler: remembered new card should enter learning state first");
+    assert(remembered.reviewDueAt.startsWith("2026-04-24"), "scheduler: remembered new card should be scheduled for next day");
 
     console.log(JSON.stringify({
       ok: true,

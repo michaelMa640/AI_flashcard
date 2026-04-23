@@ -17,7 +17,6 @@ import type {
   LocalLibrarySnapshot,
   ReviewCardInput,
   ReviewCardResult,
-  ReviewRating,
   SaveCardInput,
   SaveCardResult,
   SaveFolderInput,
@@ -27,6 +26,10 @@ import type {
   TemplateField,
   TemplateRecord,
 } from "../src/shared/local-library-types.js";
+import {
+  buildReviewFeedbackMessage,
+  buildReviewScheduleUpdate,
+} from "../src/shared/review-scheduler.js";
 
 function getLibraryPath() {
   return join(app.getPath("userData"), "local-library.json");
@@ -202,14 +205,15 @@ export async function reviewLocalCard(input: ReviewCardInput): Promise<ReviewCar
   }
 
   const now = new Date();
-  const next = buildReviewedCard(existing, input.rating, now);
+  const schedule = buildReviewScheduleUpdate(existing, input.rating, now);
+  const next = buildReviewedCard(existing, schedule, now);
   data.cards = [next].concat(data.cards.filter((card) => card.id !== next.id)).sort(sortCardsByUpdatedAt);
   await persistLocalLibraryData(data);
 
   return {
     card: next,
     snapshot: buildLocalLibrarySnapshot(data),
-    message: buildReviewMessage(input.rating, next.reviewDueAt),
+    message: buildReviewFeedbackMessage(input.rating, schedule, now),
   };
 }
 
@@ -480,77 +484,16 @@ function normalizeNumber(value: unknown, fallback: number) {
   return value;
 }
 
-function buildReviewedCard(card: LocalCardRecord, rating: ReviewRating, now: Date): LocalCardRecord {
-  const currentScore = Math.max(0, card.memoryScore);
-  const nextDays = nextIntervalDays(card, rating, currentScore);
-  const nextScore = nextMemoryScore(rating, currentScore);
-
+function buildReviewedCard(card: LocalCardRecord, schedule: ReturnType<typeof buildReviewScheduleUpdate>, now: Date): LocalCardRecord {
   return {
     ...card,
     updatedAt: now.toISOString(),
     reviewLastAt: now.toISOString(),
     reviewCount: card.reviewCount + 1,
-    reviewState: rating === "forgot" ? "learning" : "review",
-    reviewDueAt: addDays(now, nextDays).toISOString(),
-    memoryScore: nextScore,
+    reviewState: schedule.reviewState,
+    reviewDueAt: schedule.reviewDueAt,
+    memoryScore: schedule.memoryScore,
   };
-}
-
-function nextIntervalDays(card: LocalCardRecord, rating: ReviewRating, currentScore: number) {
-  if (rating === "forgot") {
-    return 1;
-  }
-
-  if (rating === "fuzzy") {
-    if (card.reviewState === "new") {
-      return 2;
-    }
-
-    return Math.min(6, 2 + Math.max(0, currentScore));
-  }
-
-  if (card.reviewState === "new") {
-    return 4;
-  }
-
-  return Math.min(21, 4 + Math.max(0, currentScore) * 3);
-}
-
-function nextMemoryScore(rating: ReviewRating, currentScore: number) {
-  if (rating === "forgot") {
-    return Math.max(0, currentScore - 1);
-  }
-
-  if (rating === "fuzzy") {
-    return Math.max(1, currentScore + 1);
-  }
-
-  return Math.max(2, currentScore + 2);
-}
-
-function buildReviewMessage(rating: ReviewRating, reviewDueAt: string) {
-  const nextAt = new Date(reviewDueAt).toLocaleString("zh-CN", {
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-
-  if (rating === "forgot") {
-    return `已记录为“不记得”，下次复习时间：${nextAt}。`;
-  }
-
-  if (rating === "fuzzy") {
-    return `已记录为“模糊”，系统会更快再次安排复习：${nextAt}。`;
-  }
-
-  return `已记录为“记得”，下次复习时间：${nextAt}。`;
-}
-
-function addDays(date: Date, days: number) {
-  const copy = new Date(date);
-  copy.setDate(copy.getDate() + days);
-  return copy;
 }
 
 function normalizeTemplateFields(value: unknown): TemplateField[] {

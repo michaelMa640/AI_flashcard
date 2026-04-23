@@ -20,6 +20,12 @@ import type {
 import { buildMarkdownDocument } from "../shared/markdown-generator.js";
 import type { Flashcard, FormState, RunMode, SourceType, StructuredData } from "../shared/flashcard-types.js";
 import { normalizeTemplateFields, resolveTemplateForCard, templateHasField, templateStrategyLabel } from "../shared/template-runtime.js";
+import {
+  buildDailyStudyPlan,
+  buildReviewChoiceHints,
+  describeReviewDueState,
+  reviewPhaseLabel,
+} from "../shared/review-scheduler.js";
 import type { VaultConfig } from "../shared/vault-types.js";
 import { requestStructuredData } from "./services/ai-client.js";
 
@@ -92,6 +98,7 @@ type Elements = {
   reviewCountMetric: HTMLParagraphElement;
   newCountMetric: HTMLParagraphElement;
   progressMetric: HTMLParagraphElement;
+  reviewPlanHint: HTMLParagraphElement;
   reviewQueueList: HTMLDivElement;
   reviewQueueEmpty: HTMLParagraphElement;
   studyStageBadge: HTMLSpanElement;
@@ -116,6 +123,7 @@ type Elements = {
   forgotButton: HTMLButtonElement;
   fuzzyButton: HTMLButtonElement;
   rememberedButton: HTMLButtonElement;
+  studySchedulerHint: HTMLParagraphElement;
   studyStatusHint: HTMLParagraphElement;
   baseUrl: HTMLInputElement;
   model: HTMLInputElement;
@@ -171,7 +179,7 @@ const buttonTimers = new WeakMap<HTMLButtonElement, number>();
 const desktopBridge = window.desktopBridge;
 const appInfo = desktopBridge?.appInfo ?? {
   name: "AI Flashcard",
-  phase: "V2 Step 6",
+  phase: "V2 Step 7",
   targetPlatforms: ["macOS", "Windows"],
   stack: ["Electron", "TypeScript", "Vite"],
 };
@@ -426,6 +434,10 @@ function renderAppShell() {
               </article>
             </div>
 
+            <p id="reviewPlanHint" class="status-hint">
+              加载完成后，这里会显示今日配额、待复习积压和新学安排。
+            </p>
+
             <div class="panel-head compact">
               <h3>今日队列</h3>
               <p>优先展示到期复习卡，再补足今日新学卡片。</p>
@@ -479,6 +491,7 @@ function renderAppShell() {
               <button id="rememberedButton" class="primary" type="button">记得</button>
             </div>
 
+            <p id="studySchedulerHint" class="persist-hint">调度加载后，这里会显示三档反馈对应的下次复习时间。</p>
             <p id="studyStatusHint" class="status-hint">完成加载后，这里会提示当前学习动作和下一步反馈。</p>
           </section>
         </section>
@@ -695,6 +708,7 @@ function collectElements(): Elements {
     reviewCountMetric: byId<HTMLParagraphElement>("reviewCountMetric"),
     newCountMetric: byId<HTMLParagraphElement>("newCountMetric"),
     progressMetric: byId<HTMLParagraphElement>("progressMetric"),
+    reviewPlanHint: byId<HTMLParagraphElement>("reviewPlanHint"),
     reviewQueueList: byId<HTMLDivElement>("reviewQueueList"),
     reviewQueueEmpty: byId<HTMLParagraphElement>("reviewQueueEmpty"),
     studyStageBadge: byId<HTMLSpanElement>("studyStageBadge"),
@@ -719,6 +733,7 @@ function collectElements(): Elements {
     forgotButton: byId<HTMLButtonElement>("forgotButton"),
     fuzzyButton: byId<HTMLButtonElement>("fuzzyButton"),
     rememberedButton: byId<HTMLButtonElement>("rememberedButton"),
+    studySchedulerHint: byId<HTMLParagraphElement>("studySchedulerHint"),
     studyStatusHint: byId<HTMLParagraphElement>("studyStatusHint"),
     baseUrl: byId<HTMLInputElement>("baseUrl"),
     model: byId<HTMLInputElement>("model"),
@@ -948,11 +963,11 @@ function renderLocalLibrarySummary(elements: Elements, snapshot: LocalLibrarySna
   elements.dataStrategyHint.textContent =
     "当前默认策略：本地优先。录入、设置和知识卡片都会先保存到应用本地知识库。";
   elements.localLibraryHint.textContent =
-    `本地知识库当前共有 ${snapshot.stats.totalCards} 张卡片，今日到期 ${snapshot.stats.dueTodayCount} 张。`;
+    `本地知识库当前共有 ${snapshot.stats.totalCards} 张卡片；今日计划复习 ${snapshot.stats.scheduledReviewCount} 张，新学 ${snapshot.stats.scheduledNewCount} 张。`;
   elements.folderSummary.textContent =
     `当前已准备 ${snapshot.stats.totalFolders} 个分类：${snapshot.folders.map((item) => item.name).join("、")}`;
   elements.templateSummary.textContent =
-    `当前已准备 ${snapshot.stats.totalTemplates} 个模板：${snapshot.templates.map((item) => item.name).join("、")}`;
+    `当前已准备 ${snapshot.stats.totalTemplates} 个模板：${snapshot.templates.map((item) => item.name).join("、")}。待复习积压 ${snapshot.stats.reviewBacklogCount} 张。`;
 }
 
 function renderFolderAndTemplateManagers(elements: Elements, snapshot: LocalLibrarySnapshot) {
@@ -1068,18 +1083,9 @@ function buildStudyQueue(snapshot: LocalLibrarySnapshot | null): StudyQueueEntry
     return [];
   }
 
-  const now = Date.now();
-  const dueCards: StudyQueueEntry[] = snapshot.cards
-    .filter((card) => card.reviewState !== "new" && new Date(card.reviewDueAt).getTime() <= now)
-    .sort((left, right) => left.reviewDueAt.localeCompare(right.reviewDueAt))
-    .slice(0, snapshot.settings.dailyReviewLimit)
-    .map((card) => ({ card, queueType: "review" as const }));
-
-  const newCards: StudyQueueEntry[] = snapshot.cards
-    .filter((card) => card.reviewState === "new")
-    .sort((left, right) => left.createdAt.localeCompare(right.createdAt))
-    .slice(0, snapshot.settings.dailyNewLimit)
-    .map((card) => ({ card, queueType: "new" as const }));
+  const plan = buildDailyStudyPlan(snapshot.cards, snapshot.settings);
+  const dueCards: StudyQueueEntry[] = plan.scheduledReviewCards.map((card) => ({ card, queueType: "review" as const }));
+  const newCards: StudyQueueEntry[] = plan.scheduledNewCards.map((card) => ({ card, queueType: "new" as const }));
 
   return dueCards.concat(newCards);
 }
@@ -1088,10 +1094,12 @@ function renderStudyQueueList(elements: Elements) {
   const reviewCount = studyQueueEntries.filter((item) => item.queueType === "review").length;
   const newCount = studyQueueEntries.filter((item) => item.queueType === "new").length;
   const currentPosition = studyQueueEntries.length === 0 ? 0 : Math.min(currentStudyIndex + 1, studyQueueEntries.length);
+  const plan = localLibrarySnapshot ? buildDailyStudyPlan(localLibrarySnapshot.cards, localLibrarySnapshot.settings) : null;
 
   elements.reviewCountMetric.textContent = String(reviewCount);
   elements.newCountMetric.textContent = String(newCount);
   elements.progressMetric.textContent = `${currentPosition} / ${studyQueueEntries.length}`;
+  elements.reviewPlanHint.textContent = buildReviewPlanHint(plan, localLibrarySnapshot);
 
   if (studyQueueEntries.length === 0) {
     elements.reviewQueueEmpty.hidden = false;
@@ -1103,11 +1111,15 @@ function renderStudyQueueList(elements: Elements) {
   elements.reviewQueueList.innerHTML = studyQueueEntries
     .map((entry, index) => {
       const queueLabel = entry.queueType === "review" ? "待复习" : "待新学";
+      const scheduleLabel = entry.queueType === "review"
+        ? `${reviewPhaseLabel(entry.card)} · ${describeReviewDueState(entry.card.reviewDueAt)}`
+        : "新卡待学 · 今日新学配额内";
       const activeClass = index === currentStudyIndex ? " history-item-active" : "";
       return `
         <button class="history-item${activeClass}" type="button" data-study-card-id="${entry.card.id}">
           <span class="history-item-title">${escapeHtml(entry.card.title)}</span>
           <span class="history-item-meta">${queueLabel} · ${sourceTypeLabel(entry.card.sourceType)} · ${escapeHtml(entry.card.folderName)}</span>
+          <span class="history-item-meta">${escapeHtml(scheduleLabel)}</span>
           <span class="history-item-snippet">${escapeHtml(readFrontPrompt(entry.card))}</span>
         </button>
       `;
@@ -1146,6 +1158,7 @@ function renderStudyCard(elements: Elements) {
     elements.studyHintCard.hidden = true;
     elements.studySummaryLine.hidden = true;
     elements.studyExplanationLine.hidden = true;
+    elements.studySchedulerHint.textContent = "今天的调度计划已经完成，新的卡片会在下一轮学习中继续进入队列。";
     elements.studyStatusHint.textContent = "今天的学习与复习队列已经处理完了。";
     elements.revealAnswerButton.disabled = true;
     elements.forgotButton.disabled = true;
@@ -1159,6 +1172,7 @@ function renderStudyCard(elements: Elements) {
   if (!context) {
     return;
   }
+  const schedulerHints = buildReviewChoiceHints(card);
   const subcardLabel = context.flashcardCount > 0
     ? ` · 子卡 ${context.flashcardIndex + 1} / ${context.flashcardCount}`
     : " · 固定模板视图";
@@ -1168,7 +1182,7 @@ function renderStudyCard(elements: Elements) {
   elements.studyCardTitle.textContent = card.title;
   elements.studyTemplateLead.textContent = context.theme.lead;
   elements.studyCardMeta.textContent =
-    `${sourceTypeLabel(card.sourceType)} · ${card.folderName} · ${context.template?.name || "默认模板"} · 第 ${currentStudyIndex + 1} 张 / 共 ${studyQueueEntries.length} 张${subcardLabel}`;
+    `${sourceTypeLabel(card.sourceType)} · ${card.folderName} · ${context.template?.name || "默认模板"} · ${reviewPhaseLabel(card)} · 第 ${currentStudyIndex + 1} 张 / 共 ${studyQueueEntries.length} 张${subcardLabel}`;
   elements.studyCardFront.textContent = readFrontPrompt(card, context.flashcardsEnabled, context.flashcardIndex);
   elements.studyCardBack.textContent = `答案：${readBackPrompt(card, context.flashcardsEnabled, context.flashcardIndex)}`;
   elements.studySummary.textContent = `速记：${card.summary || "待补充"}`;
@@ -1186,6 +1200,8 @@ function renderStudyCard(elements: Elements) {
   elements.forgotButton.disabled = !studyAnswerVisible;
   elements.fuzzyButton.disabled = !studyAnswerVisible || !context.hintEnabled;
   elements.rememberedButton.disabled = !studyAnswerVisible;
+  elements.studySchedulerHint.textContent =
+    `当前节奏：${reviewPhaseLabel(card)}。如果选择“不记得”，会在 ${schedulerHints.forgot} 再次出现；选择“模糊”会在 ${schedulerHints.fuzzy} 再次安排；选择“记得”会在 ${schedulerHints.remembered} 进入下一轮。`;
   elements.studyStatusHint.textContent = studyHintVisible
     ? "提示已展开。如果仍然觉得模糊，再点一次“模糊”记录反馈，或改选“不记得 / 记得”。"
     : context.flashcardCount > 1
@@ -1220,7 +1236,27 @@ function renderHistory(elements: Elements) {
 
 function renderHistoryMeta(card: LocalCardRecord) {
   const reviewLabel = card.reviewState === "new" ? "待学习" : card.reviewState === "learning" ? "学习中" : "待复习";
-  return `${formatRelativeDate(card.updatedAt)} · ${sourceTypeLabel(card.sourceType)} · ${card.folderName} · ${reviewLabel}`;
+  const dueLabel = card.reviewState === "new" ? "等待进入今日新学队列" : describeReviewDueState(card.reviewDueAt);
+  return `${formatRelativeDate(card.updatedAt)} · ${sourceTypeLabel(card.sourceType)} · ${card.folderName} · ${reviewLabel} · ${reviewPhaseLabel(card)} · ${dueLabel}`;
+}
+
+function buildReviewPlanHint(plan: ReturnType<typeof buildDailyStudyPlan> | null, snapshot: LocalLibrarySnapshot | null) {
+  if (!plan || !snapshot) {
+    return "加载完成后，这里会显示今日配额、待复习积压和新学安排。";
+  }
+
+  const base = `今日计划：复习 ${plan.scheduledReviewCards.length}/${snapshot.settings.dailyReviewLimit} 张，新学 ${plan.scheduledNewCards.length}/${snapshot.settings.dailyNewLimit} 张。`;
+  const backlog = [];
+
+  if (plan.reviewBacklogCount > 0) {
+    backlog.push(`还有 ${plan.reviewBacklogCount} 张到期复习暂未排入今天配额`);
+  }
+
+  if (plan.newBacklogCount > 0) {
+    backlog.push(`还有 ${plan.newBacklogCount} 张新卡等待进入后续学习日`);
+  }
+
+  return backlog.length > 0 ? `${base}${backlog.join("，")}。` : `${base}当前没有超出今日配额的积压。`;
 }
 
 function handleHistorySelect(elements: Elements, entryId: string) {
