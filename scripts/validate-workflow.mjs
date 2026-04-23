@@ -3,6 +3,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildFallbackStructuredData, buildObsidianUri } from "../dist-electron/src/shared/flashcard-utils.js";
 import { createDefaultLocalAppSettings } from "../dist-electron/src/shared/local-library-defaults.js";
+import { createDefaultLocalLibraryData } from "../dist-electron/src/shared/local-library-defaults.js";
+import {
+  reviewCardInLibrary,
+  saveCardInLibrary,
+  saveFolderInLibrary,
+  saveSettingsInLibrary,
+  saveTemplateInLibrary,
+} from "../dist-electron/src/shared/local-library-engine.js";
 import { buildMarkdownDocument } from "../dist-electron/src/shared/markdown-generator.js";
 import { buildDailyStudyPlan, buildReviewScheduleUpdate } from "../dist-electron/src/shared/review-scheduler.js";
 import { normalizeStructuredData, parseModelJson } from "../dist-electron/src/shared/structured-parser.js";
@@ -207,15 +215,157 @@ async function main() {
     assert(remembered.reviewState === "learning", "scheduler: remembered new card should enter learning state first");
     assert(remembered.reviewDueAt.startsWith("2026-04-24"), "scheduler: remembered new card should be scheduled for next day");
 
+    const workflowSummary = validateLocalLibraryJourney();
+
     console.log(JSON.stringify({
       ok: true,
       platform: process.platform,
       tempVaultRoot,
       cases: results,
+      localJourney: workflowSummary,
     }, null, 2));
   } finally {
     await rm(tempVaultRoot, { recursive: true, force: true });
   }
+}
+
+function validateLocalLibraryJourney() {
+  const now = "2026-04-23T10:30:00.000Z";
+  let library = createDefaultLocalLibraryData(now);
+
+  const templateResult = saveTemplateInLibrary(library, {
+    name: "英语精听模板",
+    description: "适用于英语表达精听与精读回忆。",
+    promptStrategy: "english",
+    enabledFields: ["summary", "explanation", "hint", "flashcards"],
+  });
+  library = templateResult.data;
+
+  const folderResult = saveFolderInLibrary(library, {
+    name: "英语精听",
+    templateId: templateResult.template.id,
+  });
+  library = folderResult.data;
+
+  const settingsResult = saveSettingsInLibrary(library, {
+    folder: "英语精听",
+    deckTag: "english/listening",
+    dailyNewLimit: 2,
+    dailyReviewLimit: 3,
+  });
+  library = settingsResult.data;
+
+  const cardForm = {
+    rawInput: "strike while the iron is hot",
+    sourceType: "phrase",
+    mode: "ai",
+    vaultName: "My Knowledge Space",
+    deckTag: "english/listening",
+    folder: "英语精听",
+    folderId: folderResult.folder.id,
+    templateId: templateResult.template.id,
+    templateName: templateResult.template.name,
+    templatePromptStrategy: templateResult.template.promptStrategy,
+    templateEnabledFields: templateResult.template.enabledFields,
+    templateDescription: templateResult.template.description,
+    context: "关注地道表达、动作感和适用语境。",
+    baseUrl: "https://api.openai.com/v1",
+    model: "gpt-4.1-mini",
+    apiKey: "mock-key",
+    systemPrompt: "unused in validation",
+  };
+  const structured = normalizeStructuredData(
+    parseModelJson(`{
+      "title": "Strike while the iron is hot",
+      "sourceType": "phrase",
+      "summaryCn": "趁热打铁，抓住时机立刻行动。",
+      "explanation": "强调机会稍纵即逝，最好在条件最合适的时候马上行动。",
+      "hint": "先想“机会窗口很短”这个画面。",
+      "keywords": ["timing", "action", "phrase"],
+      "flashcards": [
+        {
+          "front": "strike while the iron is hot 的核心含义是什么？",
+          "back": "趁热打铁，抓住时机立刻行动。"
+        },
+        {
+          "front": "这个表达常用来提醒什么？",
+          "back": "机会有限，不要拖延，适合马上推进。"
+        }
+      ],
+      "notePath": "英语精听/strike while the iron is hot.md"
+    }`),
+    cardForm,
+  );
+  const markdown = buildMarkdownDocument(structured, cardForm);
+
+  const firstSave = saveCardInLibrary(library, {
+    form: cardForm,
+    structuredData: {
+      ...structured,
+      title: markdown.title,
+      notePath: markdown.notePath,
+      keywords: markdown.keywords,
+    },
+    markdown: markdown.content,
+    uri: buildObsidianUri(cardForm.vaultName, markdown.notePath, markdown.content),
+  });
+  library = firstSave.data;
+
+  const secondSave = saveCardInLibrary(library, {
+    form: {
+      ...cardForm,
+      rawInput: "behavioral interview - STAR method",
+      sourceType: "custom",
+      folder: "求职",
+      deckTag: "career/interview",
+    },
+    structuredData: {
+      title: "STAR method",
+      sourceType: "custom",
+      summaryCn: "用情境、任务、行动、结果结构化回答经历题。",
+      explanation: "适合行为面试，用结构化方式讲清经历与结果。",
+      hint: "先回忆四个字母分别代表什么。",
+      keywords: ["interview", "star", "career"],
+      flashcards: [
+        {
+          front: "STAR 分别代表什么？",
+          back: "Situation, Task, Action, Result。",
+        },
+      ],
+      notePath: "求职/star method.md",
+    },
+    markdown: "# STAR",
+    uri: "obsidian://demo",
+  });
+  library = secondSave.data;
+
+  const reviewResult = reviewCardInLibrary(library, {
+    cardId: firstSave.card.id,
+    rating: "remembered",
+  });
+  library = reviewResult.data;
+
+  const journeyPlan = buildDailyStudyPlan(library.cards, library.settings, new Date("2026-04-23T10:40:00.000Z"));
+  const firstReviewed = reviewResult.card;
+
+  assert(library.cards.length === 2, "journey: expected two saved cards");
+  assert(library.settings.folder === "求职", "journey: settings folder should track latest saved folder");
+  assert(templateResult.snapshot.templates.some((item) => item.name === "英语精听模板"), "journey: template should be persisted");
+  assert(folderResult.snapshot.folders.some((item) => item.name === "英语精听"), "journey: folder should be persisted");
+  assert(firstSave.snapshot.cards[0].id === firstSave.card.id, "journey: latest saved card should appear first in history");
+  assert(reviewResult.card.reviewCount === 1, "journey: review should increment count");
+  assert(firstReviewed.reviewState === "learning", "journey: remembered new card should enter learning state");
+  assert(journeyPlan.scheduledNewCards.length === 1, "journey: one new card should remain in today queue");
+  assert(journeyPlan.scheduledReviewCards.length === 0, "journey: reviewed card should leave immediate due queue");
+
+  return {
+    templateName: templateResult.template.name,
+    folderName: folderResult.folder.name,
+    savedCardCount: library.cards.length,
+    reviewedCardState: firstReviewed.reviewState,
+    reviewedCardDueAt: firstReviewed.reviewDueAt,
+    remainingNewCards: journeyPlan.scheduledNewCards.length,
+  };
 }
 
 function assert(condition, message) {

@@ -1729,7 +1729,7 @@ async function handleWriteVault(elements: Elements) {
     });
 
     elements.vaultHint.textContent = `${result.message} ${result.filePath}`;
-    setButtonLabel(elements.writeVaultButton, result.written ? "已同步" : "已跳过");
+    setButtonLabel(elements.writeVaultButton, result.written ? "已导出" : "已跳过");
   } catch (error) {
     await triggerUriFallback(
       elements,
@@ -1886,7 +1886,7 @@ async function triggerUriFallback(elements: Elements, reason: string, originalEr
   }
 
   elements.vaultHint.textContent = `${reason} 已生成应急导入链接，可手动继续。${details}`;
-  setButtonLabel(elements.writeVaultButton, "同步失败");
+  setButtonLabel(elements.writeVaultButton, "导出失败");
 }
 
 function describeUriState(uri: string) {
