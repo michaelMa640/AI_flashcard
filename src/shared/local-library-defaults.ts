@@ -31,7 +31,7 @@ export function createDefaultLocalAppSettings(): LocalAppSettings {
     model: "gpt-4.1-mini",
     apiKey: "",
     systemPrompt: DEFAULT_SYSTEM_PROMPT,
-    vaultName: "My Knowledge Vault",
+    vaultName: "My Knowledge Space",
     deckTag: "english/phrases",
     folder: "英语",
     storageChannel: "local",

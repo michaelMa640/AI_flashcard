@@ -179,7 +179,7 @@ const buttonTimers = new WeakMap<HTMLButtonElement, number>();
 const desktopBridge = window.desktopBridge;
 const appInfo = desktopBridge?.appInfo ?? {
   name: "AI Flashcard",
-  phase: "V2 Step 7",
+  phase: "V2 Step 8",
   targetPlatforms: ["macOS", "Windows"],
   stack: ["Electron", "TypeScript", "Vite"],
 };
@@ -548,7 +548,7 @@ function renderAppShell() {
           <section class="panel">
             <div class="panel-head">
               <h2>数据渠道</h2>
-              <p>当前阶段默认使用本地应用数据；iCloud 和 Obsidian 作为可选外部渠道。</p>
+              <p>当前阶段默认使用本地应用数据；iCloud 备份和外部知识库导出作为可选渠道。</p>
             </div>
 
             <article class="channel-card">
@@ -565,24 +565,24 @@ function renderAppShell() {
             </article>
 
             <article class="channel-card">
-              <strong>Obsidian 外部存储</strong>
-              <p>如果你希望把卡片额外写入 Obsidian，可以在这里配置目录并执行同步。</p>
+              <strong>外部知识库目录</strong>
+              <p>如果你希望把卡片额外导出到外部知识库，可以在这里配置目录并执行同步。</p>
 
               <label class="field">
-                <span>Obsidian 存储目录</span>
+                <span>外部知识库目录</span>
                 <input id="vaultPath" type="text" placeholder="尚未选择目录" readonly />
               </label>
 
               <label class="field">
-                <span>Obsidian 存储名称</span>
-                <input id="vaultName" type="text" placeholder="My Knowledge Vault" />
+                <span>外部空间名称</span>
+                <input id="vaultName" type="text" placeholder="My Knowledge Space" />
               </label>
 
-              <p id="vaultHint" class="persist-hint">当前尚未选择目录。</p>
+              <p id="vaultHint" class="persist-hint">当前尚未连接外部目录。</p>
 
               <div class="action-row">
                 <button id="chooseVaultButton" class="secondary" type="button">选择目录</button>
-                <button id="writeVaultButton" class="primary" type="button">同步到 Obsidian</button>
+                <button id="writeVaultButton" class="primary" type="button">导出到外部知识库</button>
               </div>
             </article>
           </section>
@@ -657,17 +657,17 @@ function renderAppShell() {
 
         <section class="panel">
           <div class="panel-head">
-            <h2>外部回退链接</h2>
-            <p>当前链接仅在需要把卡片交给 Obsidian 创建时才会使用，平时不必关心。</p>
+            <h2>应急导入链接</h2>
+            <p>当外部知识库目录写入不可用时，可以使用这个应急链接继续导入，平时不必关心。</p>
           </div>
 
-          <pre id="uriOutput" class="code-block small">等待生成外部回退链接…</pre>
-          <p id="uriHint" class="persist-hint">当前还没有生成外部回退链接。</p>
+          <pre id="uriOutput" class="code-block small">等待生成应急导入链接…</pre>
+          <p id="uriHint" class="persist-hint">当前还没有生成应急导入链接。</p>
 
           <div class="action-row">
-            <button id="generateUriButton" class="ghost" type="button">生成链接</button>
-            <button id="copyUriButton" class="ghost" type="button">复制链接</button>
-            <button id="openUriButton" class="secondary" type="button">打开 Obsidian</button>
+            <button id="generateUriButton" class="ghost" type="button">生成应急链接</button>
+            <button id="copyUriButton" class="ghost" type="button">复制应急链接</button>
+            <button id="openUriButton" class="secondary" type="button">打开外部应用</button>
           </div>
 
           <p id="persistHint" class="persist-hint">普通设置会保存在当前桌面应用的本地存储中。</p>
@@ -901,7 +901,7 @@ function switchPage(elements: Elements, page: AppPage) {
 
 async function hydrateVaultState(elements: Elements) {
   if (!desktopBridge?.vault) {
-    elements.vaultHint.textContent = "当前环境不支持 Obsidian 外部存储目录选择。";
+    elements.vaultHint.textContent = "当前环境不支持外部知识库目录选择。";
     return;
   }
 
@@ -914,14 +914,14 @@ function applyVaultConfig(elements: Elements, config: VaultConfig) {
   elements.vaultPath.value = currentVaultPath;
 
   if (currentVaultPath) {
-    elements.vaultHint.textContent = `已选择目录：${currentVaultPath}`;
+    elements.vaultHint.textContent = `已连接外部目录：${currentVaultPath}`;
     if (!elements.vaultName.value.trim()) {
       elements.vaultName.value = extractVaultName(currentVaultPath);
     }
     return;
   }
 
-  elements.vaultHint.textContent = "当前尚未选择目录。";
+  elements.vaultHint.textContent = "当前尚未连接外部目录。";
 }
 
 function applySettingsToFields(elements: Elements, settings: LocalAppSettings, forceFormFields: boolean) {
@@ -933,7 +933,7 @@ function applySettingsToFields(elements: Elements, settings: LocalAppSettings, f
   elements.dailyReviewLimit.value = String(settings.dailyReviewLimit);
 
   if (forceFormFields || !elements.vaultName.value.trim()) {
-    elements.vaultName.value = settings.vaultName || "My Knowledge Vault";
+    elements.vaultName.value = settings.vaultName || "My Knowledge Space";
   }
 
   if (forceFormFields || !elements.deckTag.value.trim()) {
@@ -1278,7 +1278,7 @@ function handleHistorySelect(elements: Elements, entryId: string) {
   currentUri = entry.obsidianUri;
   isGenerating = false;
   renderOutputs(elements, currentStructuredData, currentMarkdown, currentUri);
-  elements.generationHint.textContent = "已加载一条本地卡片记录，你可以继续编辑、预览或同步到外部存储。";
+  elements.generationHint.textContent = "已加载一条本地卡片记录，你可以继续编辑、预览或导出到外部渠道。";
   switchPage(elements, "capture");
 }
 
@@ -1467,7 +1467,7 @@ function setStudyButtonsDisabled(elements: Elements, disabled: boolean) {
 
 async function handleChooseVault(elements: Elements) {
   if (!desktopBridge?.vault) {
-    elements.vaultHint.textContent = "当前环境不支持选择 Obsidian 外部存储目录。";
+    elements.vaultHint.textContent = "当前环境不支持选择外部知识库目录。";
     return;
   }
 
@@ -1678,7 +1678,7 @@ async function handleCopyUri(elements: Elements) {
 
   try {
     await navigator.clipboard.writeText(currentUri);
-    setButtonLabel(elements.copyUriButton, "已复制链接");
+    setButtonLabel(elements.copyUriButton, "已复制应急链接");
   } catch {
     setButtonLabel(elements.copyUriButton, "复制失败");
   }
@@ -1691,7 +1691,7 @@ function handleGenerateUri(elements: Elements) {
 
   currentUri = buildCurrentUri(elements);
   renderOutputs(elements, currentStructuredData, currentMarkdown, currentUri);
-  elements.uriHint.textContent = "已生成可选的外部回退链接，仅在需要交给 Obsidian 时使用。";
+  elements.uriHint.textContent = "已生成应急导入链接，仅在外部目录写入不可用时使用。";
   setButtonLabel(elements.generateUriButton, "已生成");
 }
 
@@ -1702,12 +1702,12 @@ async function handleWriteVault(elements: Elements) {
   }
 
   if (!desktopBridge?.vault) {
-    await triggerUriFallback(elements, "当前环境不支持 Obsidian 外部存储写入。");
+    await triggerUriFallback(elements, "当前环境不支持外部知识库目录写入。");
     return;
   }
 
   if (!currentVaultPath) {
-    await triggerUriFallback(elements, "尚未选择 Obsidian 外部存储目录。");
+    await triggerUriFallback(elements, "尚未连接外部知识库目录。");
     return;
   }
 
@@ -1718,7 +1718,7 @@ async function handleWriteVault(elements: Elements) {
     return;
   }
 
-  setButtonLabel(elements.writeVaultButton, "同步中...");
+  setButtonLabel(elements.writeVaultButton, "导出中...");
 
   try {
     const result = await desktopBridge.vault.writeMarkdown({
@@ -1733,7 +1733,7 @@ async function handleWriteVault(elements: Elements) {
   } catch (error) {
     await triggerUriFallback(
       elements,
-      "同步到 Obsidian 失败，已尝试切换到外部回退链接。",
+      "导出到外部知识库失败，已尝试切换到应急导入链接。",
       String(error instanceof Error ? error.message : error),
     );
   }
@@ -1748,7 +1748,7 @@ async function handleOpenUri(elements: Elements) {
   renderOutputs(elements, currentStructuredData, currentMarkdown, currentUri);
 
   if (!desktopBridge?.obsidian) {
-    elements.vaultHint.textContent = "当前环境不支持直接唤起 Obsidian，请先复制外部回退链接。";
+    elements.vaultHint.textContent = "当前环境不支持直接唤起外部应用，请先复制应急导入链接。";
     setButtonLabel(elements.openUriButton, "仅生成链接");
     return false;
   }
@@ -1760,7 +1760,7 @@ async function handleOpenUri(elements: Elements) {
     return true;
   } catch (error) {
     elements.vaultHint.textContent =
-      "Obsidian 打开失败，请手动复制外部回退链接。错误：" +
+      "外部应用打开失败，请手动复制应急导入链接。错误：" +
       String(error instanceof Error ? error.message : error);
     setButtonLabel(elements.openUriButton, "打开失败");
     return false;
@@ -1813,7 +1813,7 @@ function updateWithStructuredData(elements: Elements, structuredData: Structured
   };
   currentUri = buildObsidianUri(elements.vaultName.value, document.notePath, document.content);
   renderOutputs(elements, currentStructuredData, currentMarkdown, currentUri);
-  endGeneration(elements, "当前卡片已生成完成，你可以保存到本地知识库，或继续同步到外部存储。");
+  endGeneration(elements, "当前卡片已生成完成，你可以保存到本地知识库，或继续导出到外部渠道。");
 }
 
 function renderOutputs(
@@ -1829,8 +1829,8 @@ function renderOutputs(
     if (elements.jsonOutput) {
       elements.jsonOutput.textContent = "正在生成结构化结果…";
     }
-    elements.uriOutput.textContent = "将在生成完成后再准备外部回退链接…";
-    elements.uriHint.textContent = "当前还没有生成外部回退链接。";
+    elements.uriOutput.textContent = "将在生成完成后再准备应急导入链接…";
+    elements.uriHint.textContent = "当前还没有生成应急导入链接。";
     return;
   }
 
@@ -1848,7 +1848,7 @@ function renderOutputs(
       ? JSON.stringify(jsonData, null, 2)
       : "等待生成结构化结果…";
   }
-  elements.uriOutput.textContent = uri || "等待生成外部回退链接…";
+  elements.uriOutput.textContent = uri || "等待生成应急导入链接…";
   elements.uriHint.textContent = describeUriState(uri);
 }
 
@@ -1869,7 +1869,7 @@ function ensureContentReady(elements: Elements) {
 
 function buildCurrentUri(elements: Elements) {
   if (!currentStructuredData || !currentMarkdown) {
-    throw new Error("当前缺少可用的外部回退链接内容。");
+    throw new Error("当前缺少可用的应急导入链接内容。");
   }
 
   return buildObsidianUri(elements.vaultName.value, currentStructuredData.notePath, currentMarkdown);
@@ -1880,25 +1880,25 @@ async function triggerUriFallback(elements: Elements, reason: string, originalEr
   const details = originalError ? ` 原始错误：${originalError}` : "";
 
   if (opened) {
-    elements.vaultHint.textContent = `${reason} 已成功切换到外部回退链接。${details}`;
+    elements.vaultHint.textContent = `${reason} 已成功切换到应急导入链接。${details}`;
     setButtonLabel(elements.writeVaultButton, "已回退");
     return;
   }
 
-  elements.vaultHint.textContent = `${reason} 已生成外部回退链接，可手动继续。${details}`;
+  elements.vaultHint.textContent = `${reason} 已生成应急导入链接，可手动继续。${details}`;
   setButtonLabel(elements.writeVaultButton, "同步失败");
 }
 
 function describeUriState(uri: string) {
   if (!uri) {
-    return "当前还没有生成外部回退链接。";
+    return "当前还没有生成应急导入链接。";
   }
 
   if (uri.length > 1800) {
-    return `当前链接长度约 ${uri.length} 个字符，内容较长时建议优先使用 Obsidian 外部存储同步。`;
+    return `当前链接长度约 ${uri.length} 个字符，内容较长时建议优先使用外部目录直写。`;
   }
 
-  return `当前链接长度约 ${uri.length} 个字符，仅在需要交给 Obsidian 创建时使用。`;
+  return `当前链接长度约 ${uri.length} 个字符，仅在外部目录直写不可用时使用。`;
 }
 
 function sourceTypeLabel(sourceType: SourceType) {
@@ -2050,5 +2050,5 @@ function setButtonLabel(button: HTMLButtonElement, label: string) {
 function extractVaultName(vaultPath: string) {
   const normalized = vaultPath.replace(/\\/g, "/").replace(/\/+$/, "");
   const segments = normalized.split("/").filter(Boolean);
-  return segments.at(-1) || "My Knowledge Vault";
+  return segments.at(-1) || "My Knowledge Space";
 }

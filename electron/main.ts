@@ -63,7 +63,7 @@ function registerIpcHandlers() {
     const focusedWindow = BrowserWindow.getFocusedWindow() ?? mainWindow ?? undefined;
     const options = {
       properties: ["openDirectory", "createDirectory"] as Array<"openDirectory" | "createDirectory">,
-      title: "选择 Obsidian Vault 目录",
+      title: "选择外部知识库目录",
     };
     const result = focusedWindow
       ? await dialog.showOpenDialog(focusedWindow, options)
@@ -88,7 +88,7 @@ function registerIpcHandlers() {
     return {
       ok: true,
       uri,
-      message: "已唤起 Obsidian URI 回退链路。",
+      message: "已唤起外部应用应急导入链路。",
     };
   });
 }
@@ -97,12 +97,12 @@ function assertObsidianUri(rawUri: string) {
   const uri = rawUri.trim();
 
   if (!uri) {
-    throw new Error("Obsidian URI 不能为空。");
+    throw new Error("应急导入链接不能为空。");
   }
 
   const parsed = new URL(uri);
   if (parsed.protocol !== "obsidian:") {
-    throw new Error("当前只允许唤起 obsidian:// URI。");
+    throw new Error("当前只允许唤起受支持的应急导入链接。");
   }
 
   return uri;

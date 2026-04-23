@@ -8,7 +8,7 @@ export async function writeMarkdownToVault(payload: WriteMarkdownRequest): Promi
   const notePath = payload.notePath.trim().replace(/\\/g, "/");
 
   if (!vaultPath) {
-    throw new Error("Vault 路径不能为空。");
+    throw new Error("外部知识库目录不能为空。");
   }
 
   if (!notePath) {
@@ -45,12 +45,12 @@ export async function writeMarkdownToVault(payload: WriteMarkdownRequest): Promi
 
 function ensurePathInsideVault(vaultPath: string, targetPath: string) {
   if (!isAbsolute(vaultPath)) {
-    throw new Error("Vault 路径必须是绝对路径。");
+    throw new Error("外部知识库目录必须是绝对路径。");
   }
 
   const relativePath = relative(resolve(vaultPath), targetPath);
   if (relativePath.startsWith("..") || isAbsolute(relativePath)) {
-    throw new Error("笔记路径超出了 vault 目录范围。");
+    throw new Error("笔记路径超出了外部知识库目录范围。");
   }
 }
 
